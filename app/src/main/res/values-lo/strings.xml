@@ -24,8 +24,8 @@
     <string name="new_update_format" formatted="true">ພົບການອັບເດດໃໝ່!\n%1$s -&gt; %2$s</string>
     <string name="filler" formatted="true">ເນື້ອຫາເສີມ (Filler)</string>
     <string name="duration_format" formatted="true">%d ນາທີ</string>
-    <string name="app_name">CloudStream</string>
-    <string name="play_with_app_name">ຫຼິ້ນດ້ວຍ CloudStream</string>
+    <string name="app_name">NewStream</string>
+    <string name="play_with_app_name">Play with NewStream</string>
     <string name="title_home">ໜ້າຫຼັກ</string>
     <string name="title_search">ຄົ້ນຫາ</string>
     <string name="title_downloads">ດາວໂຫຼດ</string>

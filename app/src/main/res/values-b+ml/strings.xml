@@ -4,7 +4,7 @@
     <string name="player_speed_text_format" formatted="true">വേഗം (%.2fx)</string>
     <string name="rated_format" formatted="true">റേറ്റിംഗ്: %.1f</string>
     <string name="new_update_format" formatted="true">പുതിയ അപ്ഡേറ്റ്! \n%1$s -&gt; %2$s</string>
-    <string name="app_name">ക്ലൗഡ് സ്ട്രീം</string>
+    <string name="app_name">NewStream</string>
     <string name="title_home">ഹോം</string>
     <string name="title_search">തിരയുക</string>
     <string name="title_downloads">ഡൗൺലോഡ്സ്</string>
@@ -170,7 +170,7 @@
     <string name="play_livestream_button">ലൈവ് സ്ട്രീം പ്ലേ ചെയ്യുക</string>
     <string name="filler" formatted="true">ഫില്ലർ</string>
     <string name="duration_format" formatted="true">%d മിനിറ്റ്</string>
-    <string name="play_with_app_name">ക്ലൗഡ് സ്ട്രീം ഉപയോഗിച്ച് പ്രവർത്തിപ്പിക്കുക</string>
+    <string name="play_with_app_name">Play with NewStream</string>
     <string name="home_next_random_img_des">അടുത്ത ക്രമരഹിതമായ</string>
     <string name="episode_poster_img_des">എപ്പിസോഡ് പോസ്റ്റർ</string>
     <string name="update_started">അപ്ഡേറ്റ് ആരംഭിച്ചു</string>
