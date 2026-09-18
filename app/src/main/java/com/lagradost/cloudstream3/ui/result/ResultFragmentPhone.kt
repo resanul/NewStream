@@ -1030,7 +1030,7 @@ open class ResultFragmentPhone : BaseFragment<FragmentResultSwipeBinding>(
                                     "UTF-8"
                                 )
                                 val redirectUrl =
-                                    "https://recloudstream.github.io/csredirect?redirectto=$encodedUri"
+                                    "https://resanul.github.io/NewStream/csredirect?redirectto=$encodedUri"
                                 i.type = "text/plain"
                                 i.putExtra(Intent.EXTRA_SUBJECT, d.title)
                                 i.putExtra(Intent.EXTRA_TEXT, redirectUrl)

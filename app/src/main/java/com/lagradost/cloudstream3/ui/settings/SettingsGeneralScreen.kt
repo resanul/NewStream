@@ -235,10 +235,10 @@ object SettingsGeneralScreen : SearchableSettings {
                 preferenceItems = persistentListOf(
                     Preference.PreferenceItem.TextPreference(
                         title = stringResource(R.string.github),
-                        subtitle = "https://github.com/recloudstream/cloudstream",
+                        subtitle = "https://github.com/resanul/NewStream",
                         icon = painterResource(R.drawable.ic_github_logo),
                         onClick = {
-                            CloudStreamApp.openBrowser("https://github.com/recloudstream/cloudstream")
+                            CloudStreamApp.openBrowser("https://github.com/resanul/NewStream")
                         }
                     ),
                     Preference.PreferenceItem.TextPreference(
@@ -259,10 +259,10 @@ object SettingsGeneralScreen : SearchableSettings {
                     ),
                     Preference.PreferenceItem.TextPreference(
                         title = stringResource(R.string.cs3wiki),
-                        subtitle = "https://cloudstream.miraheze.org/",
+                        subtitle = "https://github.com/resanul/NewStream/wiki",
                         icon = painterResource(R.drawable.description_24px),
                         onClick = {
-                            CloudStreamApp.openBrowser("https://cloudstream.miraheze.org/")
+                            CloudStreamApp.openBrowser("https://github.com/resanul/NewStream/wiki")
                         }
                     ),
                 )

@@ -1,5 +1,5 @@
 name: 🐞 Application Issue Report
-description: Report a issue in CloudStream
+description: Report a issue in NewStream
 labels: [bug]
 body:
 
@@ -37,7 +37,7 @@ body:
       required: true
 
   - type: input
-    id: cloudstream-version
+    id: newstream-version
     attributes:
       label: Cloudstream version and commit hash
       description: |
@@ -86,7 +86,7 @@ body:
           required: true
         - label: I have written a short but informative title.
           required: true
-        - label: I have updated the app to pre-release version **[Latest](https://github.com/recloudstream/cloudstream/releases)**.
+        - label: I have updated the app to pre-release version **[Latest](https://github.com/resanul/NewStream/releases)**.
           required: true
         - label: I will fill out all of the requested information in this form.
           required: true

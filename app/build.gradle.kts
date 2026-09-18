@@ -379,7 +379,7 @@ dokka {
 
             sourceLink {
                 localDirectory = file("..")
-                remoteUrl("https://github.com/recloudstream/cloudstream/tree/master")
+                remoteUrl("https://github.com/resanul/NewStream/tree/master")
                 remoteLineSuffix = "#L"
             }
         }

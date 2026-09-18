@@ -286,7 +286,7 @@
     <string name="no_repository_found_error">களஞ்சியம் கிடைக்கவில்லை, முகவரி ஐ சரிபார்த்து VPN ஐ முயற்சிக்கவும்</string>
     <string name="batch_download">தொகுதி பதிவிறக்கம்</string>
     <string name="plugin_singular">சொருகு</string>
-    <string name="download_all_plugins_from_repo">எச்சரிக்கை: மூன்றாம் தரப்பு நீட்டிப்புகளைப் பயன்படுத்துவதற்கு CloudStream எந்தப் பொறுப்பையும் ஏற்காது, அவற்றிற்கு எந்த ஆதரவையும் வழங்காது!</string>
+    <string name="download_all_plugins_from_repo">எச்சரிக்கை: மூன்றாம் தரப்பு நீட்டிப்புகளைப் பயன்படுத்துவதற்கு NewStream எந்தப் பொறுப்பையும் ஏற்காது, அவற்றிற்கு எந்த ஆதரவையும் வழங்காது!</string>
     <string name="extension_language">மொழி</string>
     <string name="revert">திரும்பவும்</string>
     <string name="subscription_deleted">%s இலிருந்து குழுவிலகப்பட்டது</string>

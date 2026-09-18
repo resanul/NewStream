@@ -1,8 +1,8 @@
 # Migration guide to Compose
 
-### 1. MVI instead of MVVM 
+### 1. MVI instead of MVVM
 
-The current design of CloudStream loosely uses the MVVM architecture.
+The current design of NewStream loosely uses the MVVM architecture.
 
 This means that the UI invokes the viewmodel with function calls, and it responds with LiveData fields that are observed. While this has worked, it generates a lot of boilerplate and has created some friction.
 
@@ -10,7 +10,7 @@ To make it easier to work with Compose, the new architecture will be based on MV
 
 For a more detailed overview, see: https://www.youtube.com/watch?v=b2z1jvD4VMQ
 
-This is part of the effort to make CloudStream cross platform, as it allows us to decouple UI and logic.
+This is part of the effort to make NewStream cross platform, as it allows us to decouple UI and logic.
 
 ### 2. KMP-compatible libraries
 
