@@ -30,7 +30,7 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: newstream-v4.8.0
-          name: NewStream v4.8.0
+          tag_name: newstream-v1.0.2
+          name: NewStream v1.0.2
           generate_release_notes: true
           files: app/build/outputs/apk/stable/release/*.apk
