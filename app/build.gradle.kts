@@ -38,7 +38,8 @@ abstract class GenerateGitHashTask : DefaultTask() {
                 val headContent = head.readText().trim()
                 if (headContent.startsWith("ref:")) {
                     val refPath = headContent.substring(5) // e.g., refs/heads/main
-                    val commitFile = File(head.parentFile, refPath)
+                    val gitDir = headsDir.get().asFile.parentFile.parentFile
+                    val commitFile = File(gitDir, refPath)
                     if (commitFile.exists()) commitFile.readText().trim() else ""
                 } else headContent // If it's a detached HEAD (commit hash directly)
             } else "" // If .git/HEAD doesn't exist
@@ -53,10 +54,29 @@ abstract class GenerateGitHashTask : DefaultTask() {
 }
 
 val generateGitHash = tasks.register<GenerateGitHashTask>("generateGitHash") {
-    val gitDir = layout.projectDirectory.dir("../.git")
+    val gitMetadata = layout.projectDirectory.dir("../.git").asFile
+    val gitDir = if (gitMetadata.isFile) {
+        val gitDirPath = gitMetadata.readText().trim().removePrefix("gitdir:").trim()
+        val resolvedGitDir = File(gitDirPath)
+        if (resolvedGitDir.isAbsolute) resolvedGitDir else File(gitMetadata.parentFile, gitDirPath)
+    } else {
+        gitMetadata
+    }
+    val commonGitDir = if (gitMetadata.isFile) {
+        val commonDirFile = gitDir.resolve("commondir")
+        if (commonDirFile.isFile) {
+            val commonDirPath = commonDirFile.readText().trim()
+            val resolvedCommonDir = File(commonDirPath)
+            if (resolvedCommonDir.isAbsolute) resolvedCommonDir else File(gitDir, commonDirPath)
+        } else {
+            gitDir
+        }
+    } else {
+        gitDir
+    }
 
-    headFile.set(gitDir.file("HEAD"))
-    headsDir.set(gitDir.dir("refs/heads"))
+    headFile.set(gitDir.resolve("HEAD"))
+    headsDir.set(commonGitDir.resolve("refs/heads"))
 
     outputDir.set(layout.buildDirectory.dir("generated/git"))
 }
