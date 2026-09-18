@@ -38,8 +38,8 @@ import java.io.IOException
 import java.io.InputStreamReader
 
 object InAppUpdater {
-    private const val GITHUB_USER_NAME = "recloudstream"
-    private const val GITHUB_REPO = "cloudstream"
+    private const val GITHUB_USER_NAME = "resanul"
+    private const val GITHUB_REPO = "NewStream"
 
     private const val PRERELEASE_PACKAGE_NAME = "com.lagradost.cloudstream3.prerelease"
     private const val LOG_TAG = "InAppUpdater"
@@ -104,21 +104,21 @@ object InAppUpdater {
             app.get(url, headers = headers).text
         ).toList()
 
-        val versionRegex = Regex("""(.*?((\d+)\.(\d+)\.(\d+))\.apk)""")
         val versionRegexLocal = Regex("""(.*?((\d+)\.(\d+)\.(\d+)).*)""")
         val foundList = response.filter { rel ->
             !rel.prerelease
         }.sortedWith(compareBy { release ->
-            release.assets.firstOrNull { it.contentType == "application/vnd.android.package-archive" }?.name?.let { it1 ->
-                versionRegex.find(it1)?.groupValues?.let {
-                    it[3].toInt() * 100_000_000 + it[4].toInt() * 10_000 + it[5].toInt()
-                }
-            }
+            versionRegexLocal.find(release.tagName)?.groupValues?.let {
+                it[3].toInt() * 100_000_000 + it[4].toInt() * 10_000 + it[5].toInt()
+            } ?: 0
         }).toList()
 
         val found = foundList.lastOrNull()
-        val foundAsset = found?.assets?.getOrNull(0)
-        val foundVersion = foundAsset?.name?.let { versionRegex.find(it) }
+        val foundAsset = found?.assets?.firstOrNull {
+            it.contentType == "application/vnd.android.package-archive" &&
+                !it.name.endsWith("-unsigned.apk")
+        } ?: return Update(false, null, null, null, null)
+        val foundVersion = versionRegexLocal.find(found.tagName)
 
         if (foundVersion == null) {
             return Update(false, null, null, null, null)
