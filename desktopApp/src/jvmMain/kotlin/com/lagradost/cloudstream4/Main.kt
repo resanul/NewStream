@@ -18,11 +18,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Divider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -49,11 +49,13 @@ import org.jetbrains.compose.resources.painterResource
 import org.jetbrains.compose.resources.stringResource
 import java.awt.Desktop
 import java.net.URI
+import java.util.prefs.Preferences
 
 private enum class DesktopPage(val title: String) {
     Home("Home"),
     Search("Search"),
     Library("Library"),
+    Repositories("Repositories"),
     Settings("Settings")
 }
 
@@ -68,6 +70,9 @@ private val catalog = listOf(
     CatalogItem("Discover providers", "Browse and manage community content sources.", "Providers"),
     CatalogItem("Watch anywhere", "Keep your library and playback preferences together.", "Library")
 )
+
+private val repositoryPreferences = Preferences.userRoot().node("NewStream")
+private const val repositoriesKey = "repositories"
 
 fun main() = application {
     val windowState = rememberWindowState(width = 1100.dp, height = 700.dp)
@@ -86,6 +91,11 @@ private fun NewStreamDesktop(windowState: WindowState) {
     var page by remember { mutableStateOf(DesktopPage.Home) }
     var darkMode by remember { mutableStateOf(true) }
     val library = remember { mutableStateListOf<String>() }
+    val repositories = remember {
+        mutableStateListOf<String>().apply {
+            addAll(repositoryPreferences.get(repositoriesKey, "").split("\n").filter(String::isNotBlank))
+        }
+    }
 
     CloudStreamTheme(mode = if (darkMode) CloudStreamThemeMode.Dark else CloudStreamThemeMode.Light) {
         Scaffold { padding ->
@@ -102,6 +112,7 @@ private fun NewStreamDesktop(windowState: WindowState) {
                         DesktopPage.Home -> HomePage(library) { openNewStreamSite() }
                         DesktopPage.Search -> SearchPage(library)
                         DesktopPage.Library -> LibraryPage(library)
+                        DesktopPage.Repositories -> RepositoriesPage(repositories)
                         DesktopPage.Settings -> SettingsPage(darkMode) { darkMode = it }
                     }
                 }
@@ -153,11 +164,79 @@ private fun HomePage(library: List<String>, onOpen: () -> Unit) {
             style = MaterialTheme.typography.bodyLarge
         )
         Button(onClick = onOpen) { Text("Open NewStream online") }
-        Divider()
+        HorizontalDivider()
         Text("Quick start", style = MaterialTheme.typography.titleLarge)
         Text("Use Search to find content, then save items to Library.")
         Text("${library.size} item(s) in your library", style = MaterialTheme.typography.labelLarge)
         catalog.forEach { item -> CatalogCard(item, library.contains(item.title), {}) }
+    }
+}
+
+@Composable
+private fun RepositoriesPage(repositories: MutableList<String>) {
+    var url by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    fun addRepository() {
+        val normalized = url.trim()
+        val valid = runCatching {
+            val parsed = URI(normalized)
+            parsed.scheme in setOf("http", "https") && !parsed.host.isNullOrBlank()
+        }.getOrDefault(false)
+        when {
+            !valid -> error = "Enter a valid http:// or https:// repository URL."
+            repositories.contains(normalized) -> error = "This repository is already added."
+            else -> {
+                repositories.add(normalized)
+                repositoryPreferences.put(repositoriesKey, repositories.joinToString("\n"))
+                url = ""
+                error = null
+            }
+        }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Text("Repositories", style = MaterialTheme.typography.headlineLarge)
+        Text("Add a provider repository URL to make its extensions available on Windows.")
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            OutlinedTextField(
+                value = url,
+                onValueChange = { url = it; error = null },
+                modifier = Modifier.weight(1f),
+                label = { Text("Repository URL") },
+                placeholder = { Text("https://example.com/repository.json") },
+                singleLine = true
+            )
+            Button(onClick = ::addRepository, modifier = Modifier.padding(top = 8.dp)) {
+                Text("Add Repository")
+            }
+        }
+        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        if (repositories.isEmpty()) {
+            Text("No repositories added yet.", style = MaterialTheme.typography.bodyMedium)
+        } else {
+            Text("Added repositories", style = MaterialTheme.typography.titleMedium)
+            repositories.toList().forEach { repository ->
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(repository, modifier = Modifier.weight(1f))
+                        TextButton(onClick = {
+                            repositories.remove(repository)
+                            repositoryPreferences.put(repositoriesKey, repositories.joinToString("\n"))
+                        }) {
+                            Text("Remove")
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
