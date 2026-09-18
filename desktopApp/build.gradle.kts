@@ -16,6 +16,8 @@ kotlin {
                 exclude(group = "org.jetbrains.compose.material", module = "material")
             }
             implementation(project(":shared"))
+            implementation(libs.kotlinx.coroutines.core)
+            implementation(libs.kotlinx.serialization.json)
         }
     }
 }

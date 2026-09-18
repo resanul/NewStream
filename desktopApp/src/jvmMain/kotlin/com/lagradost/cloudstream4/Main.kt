@@ -28,9 +28,11 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -49,7 +51,16 @@ import org.jetbrains.compose.resources.painterResource
 import org.jetbrains.compose.resources.stringResource
 import java.awt.Desktop
 import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
 import java.util.prefs.Preferences
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.serializer
+import kotlinx.serialization.json.Json
 
 private enum class DesktopPage(val title: String) {
     Home("Home"),
@@ -73,6 +84,20 @@ private val catalog = listOf(
 
 private val repositoryPreferences = Preferences.userRoot().node("NewStream")
 private const val repositoriesKey = "repositories"
+private val repositoryJson = Json { ignoreUnknownKeys = true }
+private val httpClient = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build()
+
+@Serializable
+private data class RepositoryManifest(val name: String = "Repository", val pluginLists: List<String> = emptyList())
+
+@Serializable
+private data class Provider(
+    val name: String = "Unnamed provider",
+    val internalName: String = "",
+    val status: Int = 1,
+    val description: String? = null,
+    val language: String? = null
+)
 
 fun main() = application {
     val windowState = rememberWindowState(width = 1100.dp, height = 700.dp)
@@ -176,6 +201,27 @@ private fun HomePage(library: List<String>, onOpen: () -> Unit) {
 private fun RepositoriesPage(repositories: MutableList<String>) {
     var url by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var loading by remember { mutableStateOf(false) }
+    val providerLists = remember { mutableStateMapOf<String, List<Provider>>() }
+    val scope = rememberCoroutineScope()
+
+    fun refreshRepository(repositoryUrl: String) {
+        scope.launch {
+            loading = true
+            error = null
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val manifest = fetchJson<RepositoryManifest>(repositoryUrl)
+                    manifest.pluginLists.flatMap { fetchJson<List<Provider>>(it) }
+                }
+            }.onSuccess { providers ->
+                providerLists[repositoryUrl] = providers
+            }.onFailure {
+                error = "Could not load providers: ${it.message ?: "network error"}"
+            }
+            loading = false
+        }
+    }
 
     fun addRepository() {
         val normalized = url.trim()
@@ -191,6 +237,7 @@ private fun RepositoriesPage(repositories: MutableList<String>) {
                 repositoryPreferences.put(repositoriesKey, repositories.joinToString("\n"))
                 url = ""
                 error = null
+                refreshRepository(normalized)
             }
         }
     }
@@ -222,22 +269,41 @@ private fun RepositoriesPage(repositories: MutableList<String>) {
             Text("Added repositories", style = MaterialTheme.typography.titleMedium)
             repositories.toList().forEach { repository ->
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(repository, modifier = Modifier.weight(1f))
-                        TextButton(onClick = {
-                            repositories.remove(repository)
-                            repositoryPreferences.put(repositoriesKey, repositories.joinToString("\n"))
-                        }) {
-                            Text("Remove")
+                    Column(modifier = Modifier.fillMaxWidth().padding(14.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(repository, modifier = Modifier.weight(1f))
+                            TextButton(onClick = { refreshRepository(repository) }) { Text("Refresh") }
+                            TextButton(onClick = {
+                                repositories.remove(repository)
+                                providerLists.remove(repository)
+                                repositoryPreferences.put(repositoriesKey, repositories.joinToString("\n"))
+                            }) {
+                                Text("Remove")
+                            }
+                        }
+                        providerLists[repository]?.let { providers ->
+                            Text("${providers.size} provider(s)", style = MaterialTheme.typography.labelMedium)
+                            providers.forEach { provider ->
+                                Text(
+                                    "${provider.name}  •  ${if (provider.status == 1) "Available" else "Disabled"}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.padding(top = 6.dp)
+                                )
+                            }
                         }
                     }
                 }
             }
         }
+        if (loading) Text("Loading providers…", style = MaterialTheme.typography.labelMedium)
     }
+}
+
+private inline fun <reified T> fetchJson(url: String): T {
+    val request = HttpRequest.newBuilder(URI(url)).header("Accept", "application/json").build()
+    val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+    check(response.statusCode() in 200..299) { "HTTP ${response.statusCode()}" }
+    return repositoryJson.decodeFromString(serializer(), response.body())
 }
 
 @Composable
