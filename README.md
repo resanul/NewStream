@@ -1,24 +1,5 @@
 # NewStream
 
-**âš ï¸ Warning: By default, this app doesn't provide any video sources; you have to install extensions to add functionality to the app.**
-
-[![Discord](https://invidget.switchblade.xyz/5Hus6fM)](https://discord.gg/5Hus6fM)
-
-
-## Table of Contents:
-+ [About Us:](#about_us)
-+ [Installation Steps:](#install_rules)
-+ [Contributing:](#contributing)
-+ [Issues:](#issues)
-  + [Bugs Reports:](#bug_report)
-  + [Enhancement:](#enhancment)
-+ [Extension Development:](#extensions)
-+ [Language Support:](#languages)
-+ [Further Sources](#contact_and_sources)
-
-
-<a id="about_us"></a>
-
 ## About us:
 
 **NewStream is a media center that prioritizes and emphasizes complete freedom and flexibility for users and developers.**
