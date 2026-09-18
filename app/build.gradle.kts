@@ -186,6 +186,12 @@ android {
     productFlavors {
         create("stable") {
             dimension = "state"
+            if (signingConfigs.names.contains("prerelease")) {
+                signingConfig = signingConfigs.getByName("prerelease")
+            } else {
+                logger.warn("No stable release signing config; using debug signing.")
+                signingConfig = signingConfigs.getByName("debug")
+            }
         }
         create("prerelease") {
             dimension = "state"
