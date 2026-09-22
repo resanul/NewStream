@@ -27,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -88,15 +89,24 @@ private val repositoryJson = Json { ignoreUnknownKeys = true }
 private val httpClient = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build()
 
 @Serializable
-private data class RepositoryManifest(val name: String = "Repository", val pluginLists: List<String> = emptyList())
+private data class RepositoryManifest(
+    val name: String = "Repository",
+    val pluginLists: List<String> = emptyList()
+)
 
 @Serializable
 private data class Provider(
+    val url: String = "",
+    val version: Int = 0,
+    val apiVersion: Int = 1,
     val name: String = "Unnamed provider",
     val internalName: String = "",
     val status: Int = 1,
     val description: String? = null,
-    val language: String? = null
+    val language: String? = null,
+    val authors: List<String> = emptyList(),
+    val tvTypes: List<String>? = null,
+    val iconUrl: String? = null
 )
 
 fun main() = application {
@@ -116,6 +126,7 @@ private fun NewStreamDesktop(windowState: WindowState) {
     var page by remember { mutableStateOf(DesktopPage.Home) }
     var darkMode by remember { mutableStateOf(true) }
     val library = remember { mutableStateListOf<String>() }
+    val providerLists = remember { mutableStateMapOf<String, List<Provider>>() }
     val repositories = remember {
         mutableStateListOf<String>().apply {
             addAll(repositoryPreferences.get(repositoriesKey, "").split("\n").filter(String::isNotBlank))
@@ -134,10 +145,13 @@ private fun NewStreamDesktop(windowState: WindowState) {
                     contentAlignment = Alignment.TopStart
                 ) {
                     when (page) {
-                        DesktopPage.Home -> HomePage(library) { openNewStreamSite() }
-                        DesktopPage.Search -> SearchPage(library)
+                        DesktopPage.Home -> HomePage(
+                            library,
+                            providerLists.values.sumOf { it.size }
+                        ) { openNewStreamSite() }
+                        DesktopPage.Search -> SearchPage(providerLists.values.flatten())
                         DesktopPage.Library -> LibraryPage(library)
-                        DesktopPage.Repositories -> RepositoriesPage(repositories)
+                        DesktopPage.Repositories -> RepositoriesPage(repositories, providerLists)
                         DesktopPage.Settings -> SettingsPage(darkMode) { darkMode = it }
                     }
                 }
@@ -181,7 +195,7 @@ private fun NavigationPanel(
 }
 
 @Composable
-private fun HomePage(library: List<String>, onOpen: () -> Unit) {
+private fun HomePage(library: List<String>, providerCount: Int, onOpen: () -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
         Text("Welcome to NewStream", style = MaterialTheme.typography.headlineLarge)
         Text(
@@ -191,18 +205,20 @@ private fun HomePage(library: List<String>, onOpen: () -> Unit) {
         Button(onClick = onOpen) { Text("Open NewStream online") }
         HorizontalDivider()
         Text("Quick start", style = MaterialTheme.typography.titleLarge)
-        Text("Use Search to find content, then save items to Library.")
+        Text("Add a repository to load its provider catalog, then use Search to inspect available providers.")
         Text("${library.size} item(s) in your library", style = MaterialTheme.typography.labelLarge)
-        catalog.forEach { item -> CatalogCard(item, library.contains(item.title), {}) }
+        Text("$providerCount provider(s) loaded", style = MaterialTheme.typography.labelLarge)
     }
 }
 
 @Composable
-private fun RepositoriesPage(repositories: MutableList<String>) {
+private fun RepositoriesPage(
+    repositories: MutableList<String>,
+    providerLists: MutableMap<String, List<Provider>>
+) {
     var url by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
-    val providerLists = remember { mutableStateMapOf<String, List<Provider>>() }
     val scope = rememberCoroutineScope()
 
     fun refreshRepository(repositoryUrl: String) {
@@ -212,8 +228,11 @@ private fun RepositoriesPage(repositories: MutableList<String>) {
             runCatching {
                 withContext(Dispatchers.IO) {
                     val manifest = fetchJson<RepositoryManifest>(repositoryUrl)
-                    manifest.pluginLists.flatMap { fetchJson<List<Provider>>(it) }
+                    manifest.pluginLists.flatMap { pluginListUrl ->
+                        fetchJson<List<Provider>>(resolveUrl(repositoryUrl, pluginListUrl))
+                    }
                 }
+
             }.onSuccess { providers ->
                 providerLists[repositoryUrl] = providers
             }.onFailure {
@@ -221,6 +240,10 @@ private fun RepositoriesPage(repositories: MutableList<String>) {
             }
             loading = false
         }
+    }
+
+    LaunchedEffect(repositories.toList()) {
+        repositories.filterNot { providerLists.containsKey(it) }.forEach(::refreshRepository)
     }
 
     fun addRepository() {
@@ -285,11 +308,13 @@ private fun RepositoriesPage(repositories: MutableList<String>) {
                             Text("${providers.size} provider(s)", style = MaterialTheme.typography.labelMedium)
                             providers.forEach { provider ->
                                 Text(
-                                    "${provider.name}  •  ${if (provider.status == 1) "Available" else "Disabled"}",
+                                    "${provider.name}  •  ${if (provider.status == 1) "Available" else "Disabled"}" +
+                                        (provider.language?.let { "  •  $it" } ?: ""),
                                     style = MaterialTheme.typography.bodyMedium,
                                     modifier = Modifier.padding(top = 6.dp)
                                 )
                             }
+
                         }
                     }
                 }
@@ -297,6 +322,10 @@ private fun RepositoriesPage(repositories: MutableList<String>) {
         }
         if (loading) Text("Loading providers…", style = MaterialTheme.typography.labelMedium)
     }
+}
+
+private fun resolveUrl(baseUrl: String, childUrl: String): String {
+    return URI(baseUrl).resolve(childUrl).toString()
 }
 
 private inline fun <reified T> fetchJson(url: String): T {
@@ -307,10 +336,14 @@ private inline fun <reified T> fetchJson(url: String): T {
 }
 
 @Composable
-private fun SearchPage(library: MutableList<String>) {
+private fun SearchPage(providers: List<Provider>) {
     var query by remember { mutableStateOf("") }
-    val results = catalog.filter { item ->
-        query.isBlank() || item.title.contains(query, true) || item.tags.contains(query, true)
+    val results = providers.distinctBy { it.internalName.ifBlank { it.name } }.filter { provider ->
+        query.isBlank() ||
+            provider.name.contains(query, true) ||
+            provider.internalName.contains(query, true) ||
+            provider.description.orEmpty().contains(query, true) ||
+            provider.language.orEmpty().contains(query, true)
     }
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("Search", style = MaterialTheme.typography.headlineLarge)
@@ -318,15 +351,43 @@ private fun SearchPage(library: MutableList<String>) {
             value = query,
             onValueChange = { query = it },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("Search NewStream") },
+            label = { Text("Search providers") },
             singleLine = true
         )
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(results) { item ->
-                CatalogCard(item, library.contains(item.title)) {
-                    if (library.contains(item.title)) library.remove(item.title) else library.add(item.title)
-                }
+        if (results.isEmpty()) {
+            Text(
+                if (providers.isEmpty()) "No providers loaded. Add a repository first."
+                else "No providers match your search."
+            )
+        } else LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            items(results) { provider ->
+                ProviderCard(provider)
             }
+        }
+    }
+}
+
+@Composable
+private fun ProviderCard(provider: Provider) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(provider.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            provider.description?.takeIf(String::isNotBlank)?.let { Text(it) }
+            Text(
+                listOfNotNull(
+                    provider.language,
+                    provider.tvTypes?.takeIf { it.isNotEmpty() }?.joinToString()
+                ).joinToString("  •  ").ifBlank { "Provider" },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                if (provider.status == 1) "Available" else "Unavailable",
+                style = MaterialTheme.typography.labelMedium
+            )
         }
     }
 }
