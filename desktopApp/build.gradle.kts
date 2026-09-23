@@ -33,7 +33,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "NewStream"
-            packageVersion = "1.0.2"
+            packageVersion = "1.0.3"
 
             val iconsRoot = project.file("src/desktop-icons")
             macOS {

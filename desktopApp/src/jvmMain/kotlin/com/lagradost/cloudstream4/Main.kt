@@ -52,10 +52,8 @@ import org.jetbrains.compose.resources.painterResource
 import org.jetbrains.compose.resources.stringResource
 import java.awt.Desktop
 import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
 import java.util.prefs.Preferences
+import java.net.URL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -86,8 +84,6 @@ private val catalog = listOf(
 private val repositoryPreferences = Preferences.userRoot().node("NewStream")
 private const val repositoriesKey = "repositories"
 private val repositoryJson = Json { ignoreUnknownKeys = true }
-private val httpClient = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build()
-
 @Serializable
 private data class RepositoryManifest(
     val name: String = "Repository",
@@ -329,10 +325,13 @@ private fun resolveUrl(baseUrl: String, childUrl: String): String {
 }
 
 private inline fun <reified T> fetchJson(url: String): T {
-    val request = HttpRequest.newBuilder(URI(url)).header("Accept", "application/json").build()
-    val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
-    check(response.statusCode() in 200..299) { "HTTP ${response.statusCode()}" }
-    return repositoryJson.decodeFromString(serializer(), response.body())
+    val connection = URL(url).openConnection().apply {
+        connectTimeout = 15_000
+        readTimeout = 30_000
+        setRequestProperty("Accept", "application/json")
+    }
+    val response = connection.getInputStream().bufferedReader().use { it.readText() }
+    return repositoryJson.decodeFromString(serializer(), response)
 }
 
 @Composable
