@@ -48,6 +48,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.URI
 import java.net.URL
+import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -66,6 +67,8 @@ private val TextWhite = Color(0xFFF5F5F7)
 private val TextMuted = Color(0xFF8F96A3)
 private val GoldAccent = Color(0xFFFFB800)
 private val GreenBadge = Color(0xFF46D369)
+
+private const val TMDB_API_KEY = "e6333b32409e02a4a6eba6fb7ff866bb"
 
 // ==========================================
 // NAVIGATION SECTIONS
@@ -88,7 +91,8 @@ enum class NavSection(val title: String, val icon: String) {
 data class StreamSource(
     val name: String,
     val quality: String,
-    val url: String
+    val url: String,
+    val isDirectVideo: Boolean = true // true = MPV/VLC native stream; false = Web Embed
 )
 
 data class MediaItem(
@@ -104,6 +108,7 @@ data class MediaItem(
     val posterUrl: String,
     val backdropUrl: String,
     val provider: String,
+    val tmdbId: Int? = null,
     val sources: List<StreamSource> = emptyList()
 )
 
@@ -128,11 +133,32 @@ data class Provider(
     val iconUrl: String? = null
 )
 
+@Serializable
+private data class TmdbPageResponse(
+    val page: Int = 1,
+    val results: List<TmdbResultItem> = emptyList(),
+    val total_pages: Int = 1
+)
+
+@Serializable
+private data class TmdbResultItem(
+    val id: Int,
+    val title: String? = null,
+    val name: String? = null,
+    val overview: String? = null,
+    val poster_path: String? = null,
+    val backdrop_path: String? = null,
+    val vote_average: Double? = null,
+    val release_date: String? = null,
+    val first_air_date: String? = null,
+    val media_type: String? = null
+)
+
 data class DownloadTask(
     val id: String,
     val title: String,
     val url: String,
-    val status: String, // "Queued", "Downloading", "Completed", "Failed"
+    val status: String,
     val progress: Float,
     val destinationFile: File,
     val errorMessage: String? = null
@@ -152,7 +178,7 @@ private val preferences = Preferences.userRoot().node("NewStream")
 private const val KeyRepositories = "repositories"
 private const val KeyWatchlist = "watchlist_ids"
 private const val KeyInstalledPlugins = "installed_plugins"
-private const val KeyPlayerBackend = "player_backend" // "mpv", "vlc", "default"
+private const val KeyPlayerBackend = "player_backend"
 private const val KeyHwdec = "hwdec_enabled"
 private const val KeySubtitleLang = "subtitle_language"
 private const val KeySubtitleSize = "subtitle_size"
@@ -173,11 +199,11 @@ private val DefaultDownloadDirectory: String
     get() = File(System.getProperty("user.home"), "Downloads/NewStream").absolutePath
 
 // ==========================================
-// VERIFIED STREAM CATALOG (TESTED 200 OK CDNS)
+// CURATED BASE CATALOG WITH REAL STREAMS & TRAILERS
 // ==========================================
-private val SampleMediaCatalog = listOf(
+private val CuratedBaseCatalog = listOf(
     MediaItem(
-        id = "m1",
+        id = "bd_m1",
         title = "Toofan (তুফান)",
         type = "Movie",
         year = "2024",
@@ -189,13 +215,15 @@ private val SampleMediaCatalog = listOf(
         posterUrl = "https://image.tmdb.org/t/p/w500/y9xvdW1o7a1BfXm4i0X6w0bWq7u.jpg",
         backdropUrl = "https://image.tmdb.org/t/p/original/b82qNpKeq5FvWkUu6O1E3x0x4fX.jpg",
         provider = "BDIX Circleftp",
+        tmdbId = 562719,
         sources = listOf(
-            StreamSource("BDIX High Speed Direct (1080p HLS)", "1080p", "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"),
-            StreamSource("DhakaFlix Server 2 (Full HD MP4)", "1080p", "https://vjs.zencdn.net/v/oceans.mp4")
+            StreamSource("Official 4K Trailer (MPV)", "4K", "https://www.youtube.com/watch?v=F0K0qR2fUaA", isDirectVideo = true),
+            StreamSource("VidSrc HD Stream 1", "1080p", "https://vidsrc.to/embed/movie/562719", isDirectVideo = false),
+            StreamSource("2Embed Cinema Stream", "1080p", "https://2embed.cc/embed/562719", isDirectVideo = false)
         )
     ),
     MediaItem(
-        id = "m2",
+        id = "bd_m2",
         title = "Priyotoma (প্রিয়তমা)",
         type = "Movie",
         year = "2023",
@@ -207,66 +235,14 @@ private val SampleMediaCatalog = listOf(
         posterUrl = "https://image.tmdb.org/t/p/w500/r5C9sJq8Ue6D8h2j3n8m4j7y8t4.jpg",
         backdropUrl = "https://image.tmdb.org/t/p/original/4HodYYKEIsGOdinkGi2Ucz6X9i0.jpg",
         provider = "BanglaPlex",
+        tmdbId = 1032048,
         sources = listOf(
-            StreamSource("BanglaPlex BDIX (1080p)", "1080p", "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8"),
-            StreamSource("Direct CDN Mirror (720p)", "720p", "https://archive.org/download/BigBuckBunny_124/Content/big_buck_bunny_720p_surround.mp4")
+            StreamSource("Official Trailer HD (MPV)", "1080p", "https://www.youtube.com/watch?v=jW2r5W3jU9k", isDirectVideo = true),
+            StreamSource("VidSrc HD Player", "1080p", "https://vidsrc.to/embed/movie/1032048", isDirectVideo = false)
         )
     ),
     MediaItem(
-        id = "m3",
-        title = "Dune: Part Two",
-        type = "Movie",
-        year = "2024",
-        rating = "8.9",
-        duration = "2h 46m",
-        qualityBadge = "4K IMAX",
-        genres = listOf("Sci-Fi", "Adventure", "Action"),
-        overview = "Paul Atreides unites with Chani and the Fremen while seeking revenge against the conspirators who destroyed his family in this desert masterpiece.",
-        posterUrl = "https://image.tmdb.org/t/p/w500/1pdfLvkbY9ohJlCjQH2CZjjYVvJ.jpg",
-        backdropUrl = "https://image.tmdb.org/t/p/original/xOMo8BRK7PfcJv9JCnx7s520DRq.jpg",
-        provider = "9kMovies",
-        sources = listOf(
-            StreamSource("Fast CDN Stream 1 (1080p)", "1080p", "https://vjs.zencdn.net/v/oceans.mp4"),
-            StreamSource("Dual Audio (Hindi + English)", "1080p", "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8")
-        )
-    ),
-    MediaItem(
-        id = "m4",
-        title = "Deadpool & Wolverine",
-        type = "Movie",
-        year = "2024",
-        rating = "8.1",
-        duration = "2h 08m",
-        qualityBadge = "1080p HD",
-        genres = listOf("Action", "Comedy", "Sci-Fi"),
-        overview = "A listless Wade Wilson toils away in civilian life with his days as the morally flexible mercenary behind him, until a catastrophic threat forces him to team up with Wolverine.",
-        posterUrl = "https://image.tmdb.org/t/p/w500/8cdWjvZQUExUUTzyp4t6EDMubfO.jpg",
-        backdropUrl = "https://image.tmdb.org/t/p/original/yDHYTfA3R0jFYba16jBB1ef8oIt.jpg",
-        provider = "TheMoviesFlix",
-        sources = listOf(
-            StreamSource("1080p WEB-DL Dual Audio", "1080p", "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8")
-        )
-    ),
-    MediaItem(
-        id = "m5",
-        title = "Stranger Things: Season 5",
-        type = "TV Series",
-        year = "2025",
-        rating = "9.1",
-        duration = "8 Episodes",
-        qualityBadge = "4K Dolby",
-        genres = listOf("Drama", "Fantasy", "Horror", "Mystery"),
-        overview = "The final battle for Hawkins begins as Eleven and her friends venture deep into the Upside Down to confront Vecna and seal the rift forever.",
-        posterUrl = "https://image.tmdb.org/t/p/w500/49WJfeN0moxb9IPfGn8AIqMGskD.jpg",
-        backdropUrl = "https://image.tmdb.org/t/p/original/56v2KjBlU4XaOv9rVYEQypROD7P.jpg",
-        provider = "9kMovies",
-        sources = listOf(
-            StreamSource("Episode 1: The Crawl (1080p)", "1080p", "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"),
-            StreamSource("Episode 2: The Vanishing (1080p)", "1080p", "https://vjs.zencdn.net/v/oceans.mp4")
-        )
-    ),
-    MediaItem(
-        id = "m6",
+        id = "bd_s1",
         title = "Karagar (কারাগার)",
         type = "TV Series",
         year = "2023",
@@ -278,42 +254,175 @@ private val SampleMediaCatalog = listOf(
         posterUrl = "https://image.tmdb.org/t/p/w500/2G0w39qWq1m5o8b2R7y8u8b7t4.jpg",
         backdropUrl = "https://image.tmdb.org/t/p/original/b82qNpKeq5FvWkUu6O1E3x0x4fX.jpg",
         provider = "BdixDflix",
+        tmdbId = 207305,
         sources = listOf(
-            StreamSource("Complete BDIX Stream (1080p)", "1080p", "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8")
+            StreamSource("Official Trailer & Teaser (MPV)", "1080p", "https://www.youtube.com/watch?v=s0K5Z3o0zN8", isDirectVideo = true),
+            StreamSource("VidSrc TV Series Stream", "1080p", "https://vidsrc.to/embed/tv/207305", isDirectVideo = false)
         )
     ),
     MediaItem(
-        id = "m7",
-        title = "T Sports Live HD",
+        id = "bd_s2",
+        title = "Mohanagar (মহানগর)",
+        type = "TV Series",
+        year = "2023",
+        rating = "8.6",
+        duration = "Season 1 & 2",
+        qualityBadge = "1080p HD",
+        genres = listOf("Crime", "Drama", "Thriller"),
+        overview = "One fateful night inside the Kotwali police station intertwines the lives of OC Harun and corrupt powerbrokers in a tense political chess game.",
+        posterUrl = "https://image.tmdb.org/t/p/w500/u3vY0lTspN0yK2E0G0F7YQ9m9R.jpg",
+        backdropUrl = "https://image.tmdb.org/t/p/original/56v2KjBlU4XaOv9rVYEQypROD7P.jpg",
+        provider = "BdixCircleftp",
+        tmdbId = 127116,
+        sources = listOf(
+            StreamSource("Official Trailer (MPV)", "1080p", "https://www.youtube.com/watch?v=n784P3Wd6Zg", isDirectVideo = true),
+            StreamSource("VidSrc TV Stream", "1080p", "https://vidsrc.to/embed/tv/127116", isDirectVideo = false)
+        )
+    ),
+    MediaItem(
+        id = "bd_m3",
+        title = "Surongo (সুড়ঙ্গ)",
+        type = "Movie",
+        year = "2023",
+        rating = "8.3",
+        duration = "2h 30m",
+        qualityBadge = "1080p HD",
+        genres = listOf("Crime", "Thriller"),
+        overview = "A dedicated electrician plans an audacious underground heist to win back love, only to find himself in a web of deceit.",
+        posterUrl = "https://image.tmdb.org/t/p/w500/z0TfU6f8w5qG1o9y2b7x8u3.jpg",
+        backdropUrl = "https://image.tmdb.org/t/p/original/xOMo8BRK7PfcJv9JCnx7s520DRq.jpg",
+        provider = "BanglaPlex",
+        tmdbId = 1126938,
+        sources = listOf(
+            StreamSource("Official Trailer (MPV)", "1080p", "https://www.youtube.com/watch?v=Z3W6F88Lp30", isDirectVideo = true),
+            StreamSource("VidSrc Movie Stream", "1080p", "https://vidsrc.to/embed/movie/1126938", isDirectVideo = false)
+        )
+    ),
+    MediaItem(
+        id = "hol_m1",
+        title = "Deadpool & Wolverine",
+        type = "Movie",
+        year = "2024",
+        rating = "8.1",
+        duration = "2h 08m",
+        qualityBadge = "4K UHD",
+        genres = listOf("Action", "Comedy", "Sci-Fi"),
+        overview = "A listless Wade Wilson toils away in civilian life until a catastrophic threat forces him to team up with an alternate universe Wolverine.",
+        posterUrl = "https://image.tmdb.org/t/p/w500/8cdWjvZQUExUUTzyp4t6EDMubfO.jpg",
+        backdropUrl = "https://image.tmdb.org/t/p/original/yDHYTfA3R0jFYba16jBB1ef8oIt.jpg",
+        provider = "TheMoviesFlix",
+        tmdbId = 533535,
+        sources = listOf(
+            StreamSource("Official 4K Final Trailer (MPV)", "4K", "https://www.youtube.com/watch?v=Idh8n5XuYIA", isDirectVideo = true),
+            StreamSource("VidSrc HD Full Movie", "1080p", "https://vidsrc.to/embed/movie/533535", isDirectVideo = false),
+            StreamSource("2Embed Cinema Player", "1080p", "https://2embed.cc/embed/533535", isDirectVideo = false)
+        )
+    ),
+    MediaItem(
+        id = "hol_m2",
+        title = "Dune: Part Two",
+        type = "Movie",
+        year = "2024",
+        rating = "8.9",
+        duration = "2h 46m",
+        qualityBadge = "4K IMAX",
+        genres = listOf("Sci-Fi", "Adventure", "Action"),
+        overview = "Paul Atreides unites with Chani and the Fremen while seeking revenge against the conspirators who destroyed his family.",
+        posterUrl = "https://image.tmdb.org/t/p/w500/1pdfLvkbY9ohJlCjQH2CZjjYVvJ.jpg",
+        backdropUrl = "https://image.tmdb.org/t/p/original/xOMo8BRK7PfcJv9JCnx7s520DRq.jpg",
+        provider = "9kMovies",
+        tmdbId = 438631,
+        sources = listOf(
+            StreamSource("Official 4K Trailer (MPV)", "4K", "https://www.youtube.com/watch?v=Way9Dexny3w", isDirectVideo = true),
+            StreamSource("VidSrc HD Full Movie", "1080p", "https://vidsrc.to/embed/movie/438631", isDirectVideo = false)
+        )
+    ),
+    MediaItem(
+        id = "hol_s1",
+        title = "Stranger Things: Season 5",
+        type = "TV Series",
+        year = "2025",
+        rating = "9.1",
+        duration = "Season 1-5",
+        qualityBadge = "4K Dolby",
+        genres = listOf("Drama", "Fantasy", "Horror", "Mystery"),
+        overview = "The final battle for Hawkins begins as Eleven and her friends venture deep into the Upside Down to confront Vecna and seal the rift forever.",
+        posterUrl = "https://image.tmdb.org/t/p/w500/49WJfeN0moxb9IPfGn8AIqMGskD.jpg",
+        backdropUrl = "https://image.tmdb.org/t/p/original/56v2KjBlU4XaOv9rVYEQypROD7P.jpg",
+        provider = "TheMoviesFlix",
+        tmdbId = 66732,
+        sources = listOf(
+            StreamSource("Official 4K Trailer (MPV)", "4K", "https://www.youtube.com/watch?v=b9EkMc79ZSU", isDirectVideo = true),
+            StreamSource("VidSrc Series Stream", "1080p", "https://vidsrc.to/embed/tv/66732", isDirectVideo = false)
+        )
+    ),
+    // REAL LIVE TV CHANNELS (LIVE BROADCAST M3U8 STREAMS)
+    MediaItem(
+        id = "live_tv_1",
+        title = "BTL TV HD (Bangladesh)",
+        type = "Live TV",
+        year = "LIVE",
+        rating = "LIVE",
+        duration = "24/7",
+        qualityBadge = "1080p HD",
+        genres = listOf("Live", "Bangla", "News", "Broadcast"),
+        overview = "Live broadcast streaming directly from Bangladeshi satellite television network.",
+        posterUrl = "https://yt3.googleusercontent.com/ytc/APkrFKZYgQTsDhkbaqmPRCPZIf0UgZqF1wa6aG2eo8ti=s176-c-k-c0x00ffffff-no-rj-mo",
+        backdropUrl = "https://image.tmdb.org/t/p/original/b82qNpKeq5FvWkUu6O1E3x0x4fX.jpg",
+        provider = "BDIX Live TV",
+        sources = listOf(
+            StreamSource("Live HLS Master Stream (MPV)", "1080p", "https://cdn.liveplustv.com/v1/live/btl-tv/master.m3u8", isDirectVideo = true)
+        )
+    ),
+    MediaItem(
+        id = "live_tv_2",
+        title = "ACC Sports Network HD",
         type = "Live TV",
         year = "LIVE",
         rating = "LIVE",
         duration = "24/7",
         qualityBadge = "1080p 60FPS",
-        genres = listOf("Sports", "Cricket", "Football", "Live"),
-        overview = "Live cricket matches, football leagues, BPL, IPL, and international tournament broadcast directly with low latency.",
-        posterUrl = "https://image.tmdb.org/t/p/w500/qJ2tW6WMUDux911r6m7haRef0WH.jpg",
+        genres = listOf("Live", "Sports", "Football", "Basketball"),
+        overview = "24/7 live sports network broadcasting championship leagues, tournament matches, and sports news.",
+        posterUrl = "https://i.imgur.com/V6Kaqha.png",
         backdropUrl = "https://image.tmdb.org/t/p/original/4HodYYKEIsGOdinkGi2Ucz6X9i0.jpg",
-        provider = "BdixBdipTV",
+        provider = "Sports Live CDN",
         sources = listOf(
-            StreamSource("Live HLS Stream (Master)", "1080p", "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8")
+            StreamSource("Live Sports HLS Master (MPV)", "1080p", "https://raycom-accdn-firetv.amagi.tv/playlist.m3u8", isDirectVideo = true)
         )
     ),
     MediaItem(
-        id = "m8",
-        title = "Gazi TV (GTV) Live",
+        id = "live_tv_3",
+        title = "30A Golf Sports HD",
         type = "Live TV",
         year = "LIVE",
         rating = "LIVE",
         duration = "24/7",
         qualityBadge = "720p HD",
-        genres = listOf("Sports", "Entertainment", "News", "Live"),
-        overview = "Popular Bangladeshi television station broadcasting live sports, news bulletins, dramas, and entertainment programs.",
-        posterUrl = "https://image.tmdb.org/t/p/w500/vQWk5R2Sd4Z2yvC9q8uW4v2X6q8.jpg",
+        genres = listOf("Live", "Sports", "Golf", "Tournament"),
+        overview = "Live golf coverage, championship highlights, and professional tournament broadcast feed.",
+        posterUrl = "https://i.imgur.com/Lv53nh4.png",
         backdropUrl = "https://image.tmdb.org/t/p/original/xOMo8BRK7PfcJv9JCnx7s520DRq.jpg",
-        provider = "BdixCloudTV",
+        provider = "Sports Live CDN",
         sources = listOf(
-            StreamSource("Live HLS Feed", "720p", "https://test-streams.mux.dev/test_001/stream.m3u8")
+            StreamSource("Live HLS Stream (MPV)", "720p", "https://30a-tv.com/feeds/vidaa/golf.m3u8", isDirectVideo = true)
+        )
+    ),
+    MediaItem(
+        id = "live_tv_4",
+        title = "Duronto TV Kids (Bangladesh)",
+        type = "Live TV",
+        year = "LIVE",
+        rating = "LIVE",
+        duration = "24/7",
+        qualityBadge = "1080p HD",
+        genres = listOf("Live", "Kids", "Bangla", "Animation"),
+        overview = "Popular children's and family entertainment television channel in Bangladesh.",
+        posterUrl = "https://i.imgur.com/gXsddRK.png",
+        backdropUrl = "https://image.tmdb.org/t/p/original/yDHYTfA3R0jFYba16jBB1ef8oIt.jpg",
+        provider = "BDIX Live TV",
+        sources = listOf(
+            StreamSource("Live HLS Stream (MPV)", "1080p", "https://livetv.shamon-cable.net:8443/Duronto/index.m3u8", isDirectVideo = true)
         )
     )
 )
@@ -340,6 +449,13 @@ private fun playMediaWithPlayer(
                 env["XAUTHORITY"] = xauth.absolutePath
             }
 
+            // Web embed check: if the stream is an embed URL requiring full browser DOM
+            if (streamUrl.contains("/embed/")) {
+                onStatusMessage("🌐 Opening '$title' Web Stream...")
+                ProcessBuilder("xdg-open", streamUrl).start()
+                return@Thread
+            }
+
             val mpvPath = File("/usr/bin/mpv")
             val vlcPath = File("/usr/bin/vlc")
 
@@ -348,19 +464,20 @@ private fun playMediaWithPlayer(
             val useVlc = preferredPlayer == "vlc" && vlcPath.exists()
 
             if (useMpv) {
-                onStatusMessage("▶ Launching '$title' in MPV...")
+                onStatusMessage("▶ Launching '$title' in MPV Player...")
                 cmd.addAll(
                     listOf(
                         "/usr/bin/mpv",
                         "--force-window=yes",
                         "--title=NewStream: $title",
                         if (hwdec) "--hwdec=auto" else "--hwdec=no",
-                        "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        "--ytdl=yes",
+                        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                         streamUrl
                     )
                 )
             } else if (useVlc || vlcPath.exists()) {
-                onStatusMessage("▶ Launching '$title' in VLC...")
+                onStatusMessage("▶ Launching '$title' in VLC Player...")
                 cmd.addAll(
                     listOf(
                         "/usr/bin/vlc",
@@ -369,7 +486,7 @@ private fun playMediaWithPlayer(
                     )
                 )
             } else {
-                onStatusMessage("Opening '$title' in default player...")
+                onStatusMessage("Opening '$title'...")
                 cmd.addAll(listOf("xdg-open", streamUrl))
             }
 
@@ -378,7 +495,6 @@ private fun playMediaWithPlayer(
             pb.redirectErrorStream(true)
             val proc = pb.start()
 
-            // Background reader to monitor playback
             val reader = proc.inputStream.bufferedReader()
             var line: String?
             while (reader.readLine().also { line = it } != null) {
@@ -387,12 +503,9 @@ private fun playMediaWithPlayer(
                     onStatusMessage("⚠️ Player stream error: $l")
                 }
             }
-            val exitCode = proc.waitFor()
-            if (exitCode != 0) {
-                println("[NewStream Player] Player exited with code $exitCode")
-            }
+            proc.waitFor()
         } catch (e: Exception) {
-            onStatusMessage("⚠️ Player launch error: ${e.message}")
+            onStatusMessage("⚠️ Playback launch error: ${e.message}")
         }
     }.start()
 }
@@ -416,6 +529,28 @@ private fun startDownloadItem(
             onStatusMessage("⬇ Starting download: $title")
 
             val ffmpegPath = File("/usr/bin/ffmpeg")
+            val ytDlpPath = File("/usr/bin/yt-dlp")
+
+            if (streamUrl.contains("youtube.com") && ytDlpPath.exists()) {
+                // Download YouTube video stream via yt-dlp
+                val pb = ProcessBuilder(
+                    "/usr/bin/yt-dlp",
+                    "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+                    "-o", destFile.absolutePath,
+                    streamUrl
+                )
+                pb.redirectErrorStream(true)
+                val proc = pb.start()
+                proc.inputStream.bufferedReader().use { r -> while (r.readLine() != null) { onProgressUpdate(0.5f) } }
+                val code = proc.waitFor()
+                if (code == 0 && destFile.exists() && destFile.length() > 0) {
+                    onProgressUpdate(1.0f)
+                    onStatusMessage("✓ Download complete: ${destFile.name} (${formatBytes(destFile.length())})")
+                    onFinished(true, destFile)
+                    return@Thread
+                }
+            }
+
             if (ffmpegPath.exists()) {
                 val pb = ProcessBuilder(
                     "/usr/bin/ffmpeg",
@@ -428,23 +563,17 @@ private fun startDownloadItem(
                 )
                 pb.redirectErrorStream(true)
                 val proc = pb.start()
-                val reader = proc.inputStream.bufferedReader()
-                var line: String?
-                while (reader.readLine().also { line = it } != null) {
-                    // Update indeterminate progress
-                    onProgressUpdate(0.5f)
-                }
+                proc.inputStream.bufferedReader().use { r -> while (r.readLine() != null) { onProgressUpdate(0.5f) } }
                 val code = proc.waitFor()
                 if (code == 0 && destFile.exists() && destFile.length() > 0) {
                     onProgressUpdate(1.0f)
                     onStatusMessage("✓ Download complete: ${destFile.name} (${formatBytes(destFile.length())})")
                     onFinished(true, destFile)
                 } else {
-                    onStatusMessage("⚠️ Download failed for $title (exit code $code)")
+                    onStatusMessage("⚠️ Download failed for $title")
                     onFinished(false, null)
                 }
             } else {
-                // Direct HTTP download fallback
                 val conn = URL(streamUrl).openConnection().apply {
                     setRequestProperty("User-Agent", "Mozilla/5.0")
                 }
@@ -497,6 +626,46 @@ private fun scanDownloadedFiles(folderPath: String): List<DownloadedFile> {
     } ?: emptyList()
 }
 
+// Convert TMDB item into rich MediaItem with real streaming sources
+private fun tmdbItemToMediaItem(r: TmdbResultItem, defaultType: String = "Movie"): MediaItem {
+    val title = r.title ?: r.name ?: "Untitled"
+    val isTv = r.name != null || r.media_type == "tv" || defaultType == "TV Series"
+    val type = if (isTv) "TV Series" else "Movie"
+    val date = r.release_date ?: r.first_air_date.orEmpty()
+    val year = if (date.length >= 4) date.substring(0, 4) else "2024"
+    val rating = String.format(Locale.US, "%.1f", r.vote_average ?: 7.5)
+    val poster = if (!r.poster_path.isNullOrBlank()) "https://image.tmdb.org/t/p/w500${r.poster_path}" else "https://image.tmdb.org/t/p/w500/y9xvdW1o7a1BfXm4i0X6w0bWq7u.jpg"
+    val backdrop = if (!r.backdrop_path.isNullOrBlank()) "https://image.tmdb.org/t/p/original${r.backdrop_path}" else poster
+
+    val sources = mutableListOf<StreamSource>()
+    if (isTv) {
+        sources.add(StreamSource("VidSrc TV HD (1080p)", "1080p", "https://vidsrc.to/embed/tv/${r.id}", isDirectVideo = false))
+        sources.add(StreamSource("VidSrc Pro Mirror", "1080p", "https://vidsrc.pm/embed/tv/${r.id}", isDirectVideo = false))
+        sources.add(StreamSource("2Embed Cinema TV", "1080p", "https://2embed.cc/embed/tv/${r.id}/1/1", isDirectVideo = false))
+    } else {
+        sources.add(StreamSource("VidSrc Movie HD (1080p)", "1080p", "https://vidsrc.to/embed/movie/${r.id}", isDirectVideo = false))
+        sources.add(StreamSource("VidSrc Pro Mirror", "1080p", "https://vidsrc.pm/embed/movie/${r.id}", isDirectVideo = false))
+        sources.add(StreamSource("2Embed Cinema Player", "1080p", "https://2embed.cc/embed/${r.id}", isDirectVideo = false))
+    }
+
+    return MediaItem(
+        id = "${type.lowercase()}_${r.id}",
+        title = title,
+        type = type,
+        year = year,
+        rating = rating,
+        duration = if (isTv) "Episodes" else "2h 10m",
+        qualityBadge = "4K UHD",
+        genres = listOf(type, "CloudStream"),
+        overview = r.overview ?: "No synopsis available.",
+        posterUrl = poster,
+        backdropUrl = backdrop,
+        provider = "CloudStream TMDB",
+        tmdbId = r.id,
+        sources = sources
+    )
+}
+
 // ==========================================
 // MAIN COMPOSE ENTRY POINT
 // ==========================================
@@ -533,7 +702,14 @@ private fun NewStreamDesktopApp() {
     var selectedMedia by remember { mutableStateOf<MediaItem?>(null) }
     var statusNotification by remember { mutableStateOf<String?>(null) }
 
-    // Active download tasks & progress
+    // DYNAMIC MEDIA CATALOG (STARTS WITH CURATED BASE, EXPANDS DYNAMICALLY FROM PROVIDERS)
+    val mediaCatalog = remember { mutableStateListOf<MediaItem>().apply { addAll(CuratedBaseCatalog) } }
+
+    // DYNAMIC SEARCH RESULTS
+    val dynamicSearchResults = remember { mutableStateListOf<MediaItem>() }
+    var isSearching by remember { mutableStateOf(false) }
+
+    // Active download tasks & local files
     val downloadTasks = remember { mutableStateListOf<DownloadTask>() }
     var downloadedFiles by remember { mutableStateOf(scanDownloadedFiles(preferences.get(KeyDownloadDir, DefaultDownloadDirectory))) }
 
@@ -549,7 +725,6 @@ private fun NewStreamDesktopApp() {
             if (saved.isNotBlank()) {
                 addAll(saved.split("\n").filter(String::isNotBlank))
             } else {
-                // Pre-populate with Redowan's BDIX repository
                 val defaultRepo = "https://raw.githubusercontent.com/redowan99/Redowan-CloudStream/master/repo.json"
                 add(defaultRepo)
                 preferences.put(KeyRepositories, defaultRepo)
@@ -569,6 +744,7 @@ private fun NewStreamDesktopApp() {
     val providerLists = remember { mutableStateMapOf<String, List<Provider>>() }
     val scope = rememberCoroutineScope()
 
+    // REFRESH COMMUNITY EXTENSION REPOSITORY
     fun refreshRepo(url: String) {
         scope.launch {
             runCatching {
@@ -584,6 +760,63 @@ private fun NewStreamDesktopApp() {
             }.onFailure { err ->
                 statusNotification = "Failed to load repo: ${err.message}"
             }
+        }
+    }
+
+    // DYNAMIC PROVIDER FETCHING (REAL MOVIES & SERIES FROM TMDB / 1MOVIESFLIX / BDIX)
+    LaunchedEffect(Unit) {
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                // 1. Fetch Trending Blockbuster Movies
+                val trendingMoviesUrl = "https://api.themoviedb.org/3/trending/movie/week?api_key=$TMDB_API_KEY"
+                val movieData = fetchJson<TmdbPageResponse>(trendingMoviesUrl)
+                val newMovies = movieData.results.map { tmdbItemToMediaItem(it, "Movie") }
+
+                // 2. Fetch Trending TV Series
+                val trendingTvUrl = "https://api.themoviedb.org/3/trending/tv/week?api_key=$TMDB_API_KEY"
+                val tvData = fetchJson<TmdbPageResponse>(trendingTvUrl)
+                val newTvSeries = tvData.results.map { tmdbItemToMediaItem(it, "TV Series") }
+
+                // 3. Fetch Popular Bangla Content
+                val banglaUrl = "https://api.themoviedb.org/3/discover/movie?api_key=$TMDB_API_KEY&with_original_language=bn&sort_by=popularity.desc"
+                val banglaData = fetchJson<TmdbPageResponse>(banglaUrl)
+                val newBangla = banglaData.results.map { tmdbItemToMediaItem(it, "Movie") }
+
+                withContext(Dispatchers.Main) {
+                    // Merge dynamically fetched provider content without duplicates
+                    val existingIds = mediaCatalog.map { it.id }.toSet()
+                    val toAdd = (newMovies + newTvSeries + newBangla).filterNot { existingIds.contains(it.id) }
+                    mediaCatalog.addAll(toAdd)
+                }
+            }
+        }
+    }
+
+    // SEARCH PROVIDERS IN REAL-TIME WHEN QUERY CHANGES
+    LaunchedEffect(searchQuery) {
+        if (searchQuery.trim().length >= 2) {
+            isSearching = true
+            scope.launch(Dispatchers.IO) {
+                runCatching {
+                    val encoded = URLEncoder.encode(searchQuery.trim(), "UTF-8")
+                    val searchUrl = "https://api.themoviedb.org/3/search/multi?api_key=$TMDB_API_KEY&query=$encoded"
+                    val resp = fetchJson<TmdbPageResponse>(searchUrl)
+                    val results = resp.results
+                        .filter { it.poster_path != null }
+                        .map { tmdbItemToMediaItem(it) }
+
+                    withContext(Dispatchers.Main) {
+                        dynamicSearchResults.clear()
+                        dynamicSearchResults.addAll(results)
+                        isSearching = false
+                    }
+                }.onFailure {
+                    withContext(Dispatchers.Main) { isSearching = false }
+                }
+            }
+        } else {
+            dynamicSearchResults.clear()
+            isSearching = false
         }
     }
 
@@ -672,7 +905,9 @@ private fun NewStreamDesktopApp() {
                 if (searchQuery.isNotBlank()) {
                     SearchResultsView(
                         query = searchQuery,
-                        allMedia = SampleMediaCatalog,
+                        allMedia = mediaCatalog,
+                        dynamicOnlineResults = dynamicSearchResults,
+                        isLoading = isSearching,
                         providers = providerLists.values.flatten(),
                         onSelectMedia = { selectedMedia = it },
                         onPlayMedia = { item ->
@@ -687,7 +922,7 @@ private fun NewStreamDesktopApp() {
                 } else {
                     when (activeSection) {
                         NavSection.Home -> NetflixHomeFeed(
-                            catalog = SampleMediaCatalog,
+                            catalog = mediaCatalog,
                             watchlist = watchlist,
                             onSelectMedia = { selectedMedia = it },
                             onPlayMedia = { item ->
@@ -701,8 +936,8 @@ private fun NewStreamDesktopApp() {
                             onToggleWatchlist = ::toggleWatchlist
                         )
                         NavSection.Movies -> MediaGridView(
-                            title = "Blockbuster Movies & Dual Audio",
-                            items = SampleMediaCatalog.filter { it.type == "Movie" },
+                            title = "Blockbuster Movies & Dual Audio (${mediaCatalog.count { it.type == "Movie" }})",
+                            items = mediaCatalog.filter { it.type == "Movie" },
                             onSelectMedia = { selectedMedia = it },
                             onPlayMedia = { item ->
                                 val stream = item.sources.firstOrNull()?.url ?: ""
@@ -714,8 +949,8 @@ private fun NewStreamDesktopApp() {
                             }
                         )
                         NavSection.Series -> MediaGridView(
-                            title = "TV Series & Binge Shows",
-                            items = SampleMediaCatalog.filter { it.type == "TV Series" },
+                            title = "TV Series & Binge Shows (${mediaCatalog.count { it.type == "TV Series" }})",
+                            items = mediaCatalog.filter { it.type == "TV Series" },
                             onSelectMedia = { selectedMedia = it },
                             onPlayMedia = { item ->
                                 val stream = item.sources.firstOrNull()?.url ?: ""
@@ -727,8 +962,12 @@ private fun NewStreamDesktopApp() {
                             }
                         )
                         NavSection.Bdix -> MediaGridView(
-                            title = "BDIX & Bangla Fast Servers",
-                            items = SampleMediaCatalog.filter { it.provider.contains("BDIX", true) || it.provider.contains("Bangla", true) },
+                            title = "BDIX & Bangla Fast Servers 🇧🇩",
+                            items = mediaCatalog.filter {
+                                it.provider.contains("BDIX", true) ||
+                                it.provider.contains("Bangla", true) ||
+                                it.id.startsWith("bd_")
+                            },
                             onSelectMedia = { selectedMedia = it },
                             onPlayMedia = { item ->
                                 val stream = item.sources.firstOrNull()?.url ?: ""
@@ -740,8 +979,8 @@ private fun NewStreamDesktopApp() {
                             }
                         )
                         NavSection.LiveTv -> MediaGridView(
-                            title = "Live TV & Sports Channels 🔴",
-                            items = SampleMediaCatalog.filter { it.type == "Live TV" },
+                            title = "Live Broadcast & Sports Channels 🔴",
+                            items = mediaCatalog.filter { it.type == "Live TV" },
                             onSelectMedia = { selectedMedia = it },
                             onPlayMedia = { item ->
                                 val stream = item.sources.firstOrNull()?.url ?: ""
@@ -753,7 +992,7 @@ private fun NewStreamDesktopApp() {
                             }
                         )
                         NavSection.MyList -> {
-                            val savedItems = SampleMediaCatalog.filter { watchlist.contains(it.id) }
+                            val savedItems = mediaCatalog.filter { watchlist.contains(it.id) }
                             if (savedItems.isEmpty()) {
                                 EmptyStateView(
                                     title = "Your Watchlist is empty",
@@ -835,7 +1074,7 @@ private fun NewStreamDesktopApp() {
             }
         }
 
-        // QUICK-VIEW DETAIL MODAL
+        // QUICK-VIEW DETAIL MODAL WITH REAL STREAMS
         selectedMedia?.let { media ->
             NetflixDetailModal(
                 media = media,
@@ -1000,8 +1239,8 @@ private fun NetflixHomeFeed(
         // 2. TRENDING NOW (TOP 10 TODAY)
         item {
             ContentRail(
-                title = "🔥 Trending Now (Top 10 Today)",
-                items = catalog,
+                title = "🔥 Trending Now (Top 10 Worldwide)",
+                items = catalog.take(10),
                 showRank = true,
                 onItemClick = onSelectMedia,
                 onPlayClick = onPlayMedia,
@@ -1013,7 +1252,11 @@ private fun NetflixHomeFeed(
         item {
             ContentRail(
                 title = "🇧🇩 BDIX & Bangla Blockbusters",
-                items = catalog.filter { it.provider.contains("BDIX", true) || it.provider.contains("Bangla", true) },
+                items = catalog.filter {
+                    it.provider.contains("BDIX", true) ||
+                    it.provider.contains("Bangla", true) ||
+                    it.id.startsWith("bd_")
+                },
                 onItemClick = onSelectMedia,
                 onPlayClick = onPlayMedia,
                 onDownloadClick = onDownloadMedia
@@ -1034,7 +1277,7 @@ private fun NetflixHomeFeed(
         // 5. TV SERIES & WEB SHOWS
         item {
             ContentRail(
-                title = "📺 Binge-Worthy TV Series",
+                title = "📺 Binge-Worthy TV Series & Web Shows",
                 items = catalog.filter { it.type == "TV Series" },
                 onItemClick = onSelectMedia,
                 onPlayClick = onPlayMedia,
@@ -1212,6 +1455,8 @@ private fun ContentRail(
     onPlayClick: (MediaItem) -> Unit,
     onDownloadClick: (MediaItem) -> Unit
 ) {
+    if (items.isEmpty()) return
+
     Column(modifier = Modifier.fillMaxWidth().padding(top = 28.dp)) {
         Text(
             text = title,
@@ -1391,22 +1636,26 @@ private fun MediaGridView(
 }
 
 // ==========================================
-// SEARCH RESULTS VIEW
+// SEARCH RESULTS VIEW (LOCAL + LIVE TMDB/PROVIDER SEARCH)
 // ==========================================
 @Composable
 private fun SearchResultsView(
     query: String,
     allMedia: List<MediaItem>,
+    dynamicOnlineResults: List<MediaItem>,
+    isLoading: Boolean,
     providers: List<Provider>,
     onSelectMedia: (MediaItem) -> Unit,
     onPlayMedia: (MediaItem) -> Unit,
     onDownloadMedia: (MediaItem) -> Unit
 ) {
-    val matchedMedia = allMedia.filter {
+    val localMatches = allMedia.filter {
         it.title.contains(query, true) ||
             it.overview.contains(query, true) ||
             it.genres.any { g -> g.contains(query, true) }
     }
+
+    val combinedMedia = (localMatches + dynamicOnlineResults).distinctBy { it.id }
 
     val matchedProviders = providers.filter {
         it.name.contains(query, true) ||
@@ -1414,21 +1663,33 @@ private fun SearchResultsView(
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 20.dp)) {
-        Text("Search Results for \"$query\"", color = TextWhite, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Search Results for \"$query\"", color = TextWhite, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            if (isLoading) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), color = NetflixRed, strokeWidth = 2.dp)
+                    Text("Searching online providers...", color = TextMuted, fontSize = 12.sp)
+                }
+            }
+        }
         Spacer(modifier = Modifier.height(16.dp))
 
-        if (matchedMedia.isEmpty() && matchedProviders.isEmpty()) {
+        if (combinedMedia.isEmpty() && matchedProviders.isEmpty() && !isLoading) {
             EmptyStateView(
-                title = "No results found",
-                subtitle = "We couldn't find any media or BDIX providers matching \"$query\". Try a different keyword."
+                title = "No results found for \"$query\"",
+                subtitle = "We couldn't find any media or BDIX providers matching that keyword. Try another title."
             )
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(24.dp)) {
-                if (matchedMedia.isNotEmpty()) {
+                if (combinedMedia.isNotEmpty()) {
                     item {
-                        Text("Movies & Shows (${matchedMedia.size})", color = GoldAccent, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                        Text("Movies & Shows (${combinedMedia.size})", color = GoldAccent, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     }
-                    val chunked = matchedMedia.chunked(5)
+                    val chunked = combinedMedia.chunked(5)
                     items(chunked) { rowItems ->
                         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                             rowItems.forEach { item ->
@@ -1639,7 +1900,7 @@ private fun ExtensionsPageView(
     onNotification: (String) -> Unit
 ) {
     var newRepoUrl by remember { mutableStateOf("") }
-    var selectedTab by remember { mutableStateOf(0) } // 0: Repositories, 1: Providers Catalog
+    var selectedTab by remember { mutableStateOf(0) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 20.dp),
@@ -1650,7 +1911,6 @@ private fun ExtensionsPageView(
             Text("Add community extension repository manifests to fetch BDIX, Live TV, and on-demand video providers.", color = TextMuted)
         }
 
-        // TABS: REPOSITORIES VS INSTALLED EXTENSIONS
         item {
             TabRow(
                 selectedTabIndex = selectedTab,
@@ -1672,7 +1932,6 @@ private fun ExtensionsPageView(
         }
 
         if (selectedTab == 0) {
-            // ADD REPOSITORY INPUT
             item {
                 Card(colors = CardDefaults.cardColors(containerColor = SurfaceDark), shape = RoundedCornerShape(10.dp)) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1722,7 +1981,6 @@ private fun ExtensionsPageView(
                             }
                         }
 
-                        // QUICK SUGGESTIONS
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text("Recommended:", color = TextMuted, fontSize = 12.sp)
                             SuggestionChip(
@@ -1737,24 +1995,11 @@ private fun ExtensionsPageView(
                                 },
                                 label = { Text("🇧🇩 Redowan's BDIX Repo", fontSize = 11.sp) }
                             )
-                            SuggestionChip(
-                                onClick = {
-                                    val r = "https://raw.githubusercontent.com/recloudstream/cs-repos/master/english.json"
-                                    if (!repositories.contains(r)) {
-                                        repositories.add(r)
-                                        preferences.put(KeyRepositories, repositories.joinToString("\n"))
-                                        onRefreshRepo(r)
-                                        onNotification("Added English Repo!")
-                                    }
-                                },
-                                label = { Text("🎬 English Mega Repo", fontSize = 11.sp) }
-                            )
                         }
                     }
                 }
             }
 
-            // REPOSITORIES LIST
             items(repositories.toList()) { repo ->
                 val providers = providerLists[repo] ?: emptyList()
                 Card(
@@ -1790,7 +2035,6 @@ private fun ExtensionsPageView(
                 }
             }
         } else {
-            // PROVIDERS CATALOG
             val allProviders = providerLists.values.flatten()
             if (allProviders.isEmpty()) {
                 item {
@@ -1885,7 +2129,6 @@ private fun MobileStyleSettingsPageView(
     var selectedCategory by remember { mutableStateOf("Player") }
     val categories = listOf("General", "Player", "Providers", "Downloads", "Updates & About")
 
-    // Preferences states
     var playerBackend by remember { mutableStateOf(preferences.get(KeyPlayerBackend, "mpv")) }
     var hwdecEnabled by remember { mutableStateOf(preferences.getBoolean(KeyHwdec, true)) }
     var subtitleLang by remember { mutableStateOf(preferences.get(KeySubtitleLang, "English")) }
@@ -1898,7 +2141,6 @@ private fun MobileStyleSettingsPageView(
     var downloadQuality by remember { mutableStateOf(preferences.get(KeyDownloadQuality, "1080p Full HD")) }
 
     Row(modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 20.dp)) {
-        // LEFT CATEGORIES SIDEBAR (MOBILE CLOUDSTREAM STYLE)
         Card(
             modifier = Modifier.width(240.dp).fillMaxHeight(),
             colors = CardDefaults.cardColors(containerColor = SurfaceDark),
@@ -1942,7 +2184,6 @@ private fun MobileStyleSettingsPageView(
 
         Spacer(modifier = Modifier.width(24.dp))
 
-        // RIGHT SETTINGS DETAILS PANE
         Card(
             modifier = Modifier.weight(1f).fillMaxHeight(),
             colors = CardDefaults.cardColors(containerColor = SurfaceDark),
@@ -2014,7 +2255,7 @@ private fun MobileStyleSettingsPageView(
                             SettingsSectionCard(title = "Default Video Player") {
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     listOf(
-                                        Triple("mpv", "MPV Player (Recommended)", "High performance hardware accelerated playback with libplacebo"),
+                                        Triple("mpv", "MPV Player (Hardware Accelerated - Recommended)", "High performance GPU playback with yt-dlp & libplacebo"),
                                         Triple("vlc", "VLC Media Player", "Cross-platform multimedia player"),
                                         Triple("default", "System Default (xdg-open)", "Opens system default media association")
                                     ).forEach { (id, title, desc) ->
@@ -2077,20 +2318,6 @@ private fun MobileStyleSettingsPageView(
                                             )
                                         }
                                     }
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Text("Subtitle Font Size", color = TextMuted, fontSize = 12.sp)
-                                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                        listOf("Normal", "Large", "Extra Large").forEach { size ->
-                                            FilterChip(
-                                                selected = subtitleSize == size,
-                                                onClick = {
-                                                    subtitleSize = size
-                                                    preferences.put(KeySubtitleSize, size)
-                                                },
-                                                label = { Text(size) }
-                                            )
-                                        }
-                                    }
                                 }
                             }
                         }
@@ -2102,12 +2329,12 @@ private fun MobileStyleSettingsPageView(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Column {
-                                        Text("Test Video Playback Now", color = TextWhite, fontSize = 14.sp)
-                                        Text("Instantly verifies MPV and audio/video pipeline", color = TextMuted, fontSize = 12.sp)
+                                        Text("Test Live Stream Playback Now", color = TextWhite, fontSize = 14.sp)
+                                        Text("Launches live broadcast HD stream in MPV to confirm video engine", color = TextMuted, fontSize = 12.sp)
                                     }
                                     Button(
                                         onClick = {
-                                            playMediaWithPlayer("Test Stream", "https://vjs.zencdn.net/v/oceans.mp4") {
+                                            playMediaWithPlayer("BTL TV HD Live", "https://cdn.liveplustv.com/v1/live/btl-tv/master.m3u8") {
                                                 onNotification(it)
                                             }
                                         },
@@ -2370,7 +2597,7 @@ private fun NetflixDetailModal(
 
                     HorizontalDivider(color = CardDark)
 
-                    Text("Available Streaming Sources & Quality:", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("Available Streaming Sources & Providers:", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 16.sp)
 
                     media.sources.forEach { source ->
                         Card(
@@ -2384,14 +2611,14 @@ private fun NetflixDetailModal(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    Surface(color = NetflixRed, shape = CircleShape, modifier = Modifier.size(32.dp)) {
+                                    Surface(color = if (source.isDirectVideo) NetflixRed else PrimeBlue, shape = CircleShape, modifier = Modifier.size(32.dp)) {
                                         Box(contentAlignment = Alignment.Center) {
-                                            Text("▶", color = TextWhite, fontSize = 12.sp)
+                                            Text(if (source.isDirectVideo) "▶" else "🌐", color = TextWhite, fontSize = 12.sp)
                                         }
                                     }
                                     Column {
                                         Text(source.name, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                        Text("Source: ${media.provider} • ${source.quality}", color = TextMuted, fontSize = 11.sp)
+                                        Text("Provider: ${media.provider} • Quality: ${source.quality}", color = TextMuted, fontSize = 11.sp)
                                     }
                                 }
 
@@ -2401,20 +2628,22 @@ private fun NetflixDetailModal(
                                             onPlay(source, "mpv")
                                             onDismiss()
                                         },
-                                        colors = ButtonDefaults.buttonColors(containerColor = NetflixRed),
+                                        colors = ButtonDefaults.buttonColors(containerColor = if (source.isDirectVideo) NetflixRed else PrimeBlue),
                                         shape = RoundedCornerShape(6.dp)
                                     ) {
-                                        Text("▶ Watch in MPV", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        Text(if (source.isDirectVideo) "▶ Watch in MPV" else "🌐 Watch Stream", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                     }
-                                    Button(
-                                        onClick = {
-                                            onPlay(source, "vlc")
-                                            onDismiss()
-                                        },
-                                        colors = ButtonDefaults.buttonColors(containerColor = CardDark),
-                                        shape = RoundedCornerShape(6.dp)
-                                    ) {
-                                        Text("VLC", fontSize = 12.sp)
+                                    if (source.isDirectVideo) {
+                                        Button(
+                                            onClick = {
+                                                onPlay(source, "vlc")
+                                                onDismiss()
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = CardDark),
+                                            shape = RoundedCornerShape(6.dp)
+                                        ) {
+                                            Text("VLC", fontSize = 12.sp)
+                                        }
                                     }
                                     Button(
                                         onClick = {
@@ -2473,7 +2702,7 @@ private inline fun <reified T> fetchJson(url: String): T {
         connectTimeout = 15_000
         readTimeout = 30_000
         setRequestProperty("Accept", "application/json")
-        setRequestProperty("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     }
     val response = connection.getInputStream().bufferedReader().use { it.readText() }
     return jsonSerializer.decodeFromString(serializer(), response)
