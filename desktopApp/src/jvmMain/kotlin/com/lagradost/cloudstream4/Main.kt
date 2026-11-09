@@ -83,7 +83,11 @@ private val catalog = listOf(
 
 private val repositoryPreferences = Preferences.userRoot().node("NewStream")
 private const val repositoriesKey = "repositories"
-private val repositoryJson = Json { ignoreUnknownKeys = true }
+private val repositoryJson = Json {
+    ignoreUnknownKeys = true
+    isLenient = true
+    coerceInputValues = true
+}
 @Serializable
 private data class RepositoryManifest(
     val name: String = "Repository",
@@ -263,7 +267,7 @@ private fun RepositoriesPage(
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("Repositories", style = MaterialTheme.typography.headlineLarge)
-        Text("Add a provider repository URL to make its extensions available on Windows.")
+        Text("Add a provider repository URL to make its extensions available.")
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -329,6 +333,7 @@ private inline fun <reified T> fetchJson(url: String): T {
         connectTimeout = 15_000
         readTimeout = 30_000
         setRequestProperty("Accept", "application/json")
+        setRequestProperty("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     }
     val response = connection.getInputStream().bufferedReader().use { it.readText() }
     return repositoryJson.decodeFromString(serializer(), response)
@@ -435,7 +440,7 @@ private fun SettingsPage(darkMode: Boolean, onDarkModeChanged: (Boolean) -> Unit
                 Text(if (darkMode) "Enabled" else "Disabled")
             }
         }
-        Text("Version 1.0.2", style = MaterialTheme.typography.labelMedium)
+        Text("Version 1.0.3", style = MaterialTheme.typography.labelMedium)
     }
 }
 
