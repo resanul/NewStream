@@ -21,11 +21,14 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build NewStream release APK
-        run: bash gradlew assembleStableRelease :desktopApp:packageMsi
+      - name: Build NewStream release APK and Linux DEB
+        run: ./gradlew assembleStableRelease :desktopApp:packageDeb
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
@@ -35,4 +38,4 @@ jobs:
           generate_release_notes: true
           files: |
             app/build/outputs/apk/stable/release/*.apk
-            desktopApp/build/compose/binaries/main/msi/*.msi
+            desktopApp/build/compose/binaries/main/deb/*.deb

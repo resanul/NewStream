@@ -38,6 +38,25 @@ Our documentation provides the steps to install and configure NewStream for your
 
 [Getting Started With NewStream:](https://github.com/resanul/NewStream/wiki/)
 
+### Linux (Debian / Kali / Ubuntu) Desktop Build:
+
+To build the native Debian package or portable standalone Linux binary:
+```bash
+# Build the Debian (.deb) installer package:
+./gradlew :desktopApp:packageDeb
+
+# The .deb package will be generated at:
+# desktopApp/build/compose/binaries/main/deb/newstream_<version>_amd64.deb
+
+# Install with dpkg:
+sudo dpkg -i desktopApp/build/compose/binaries/main/deb/newstream_*.deb
+
+# Or build standalone portable application:
+./gradlew :desktopApp:createDistributable
+# Run directly:
+./desktopApp/build/compose/binaries/main/app/NewStream/bin/NewStream
+```
+
 <a id="contributing"></a>
 
 ## Contributing:
