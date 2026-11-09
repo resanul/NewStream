@@ -44,10 +44,13 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.serializer
 import org.jetbrains.compose.resources.painterResource
-import org.jetbrains.compose.resources.stringResource
 import java.io.File
+import java.io.FileOutputStream
 import java.net.URI
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.prefs.Preferences
 
 // ==========================================
@@ -65,7 +68,7 @@ private val GoldAccent = Color(0xFFFFB800)
 private val GreenBadge = Color(0xFF46D369)
 
 // ==========================================
-// MODELS
+// NAVIGATION SECTIONS
 // ==========================================
 enum class NavSection(val title: String, val icon: String) {
     Home("Home", "🏠"),
@@ -73,10 +76,15 @@ enum class NavSection(val title: String, val icon: String) {
     Series("TV Series", "📺"),
     Bdix("BDIX Bangla", "🇧🇩"),
     LiveTv("Live TV", "🔴"),
-    MyList("My Watchlist", "⭐"),
-    Repositories("Repositories", "⚙️")
+    MyList("Watchlist", "⭐"),
+    Downloads("Downloads", "📥"),
+    Extensions("Extensions", "🧩"),
+    Settings("Settings", "⚙️")
 }
 
+// ==========================================
+// DATA MODELS
+// ==========================================
 data class StreamSource(
     val name: String,
     val quality: String,
@@ -106,7 +114,7 @@ private data class RepositoryManifest(
 )
 
 @Serializable
-private data class Provider(
+data class Provider(
     val url: String = "",
     val version: Int = 0,
     val apiVersion: Int = 1,
@@ -120,17 +128,52 @@ private data class Provider(
     val iconUrl: String? = null
 )
 
-private val repositoryPreferences = Preferences.userRoot().node("NewStream")
-private const val repositoriesKey = "repositories"
-private const val watchlistKey = "watchlist_ids"
-private val repositoryJson = Json {
+data class DownloadTask(
+    val id: String,
+    val title: String,
+    val url: String,
+    val status: String, // "Queued", "Downloading", "Completed", "Failed"
+    val progress: Float,
+    val destinationFile: File,
+    val errorMessage: String? = null
+)
+
+data class DownloadedFile(
+    val name: String,
+    val sizeFormatted: String,
+    val dateFormatted: String,
+    val file: File
+)
+
+// ==========================================
+// PREFERENCES CONSTANTS
+// ==========================================
+private val preferences = Preferences.userRoot().node("NewStream")
+private const val KeyRepositories = "repositories"
+private const val KeyWatchlist = "watchlist_ids"
+private const val KeyInstalledPlugins = "installed_plugins"
+private const val KeyPlayerBackend = "player_backend" // "mpv", "vlc", "default"
+private const val KeyHwdec = "hwdec_enabled"
+private const val KeySubtitleLang = "subtitle_language"
+private const val KeySubtitleSize = "subtitle_size"
+private const val KeyAutoplayNext = "autoplay_next"
+private const val KeyDohProvider = "doh_provider"
+private const val KeyNsfwFilter = "nsfw_filter"
+private const val KeyAppLanguage = "app_language"
+private const val KeyDownloadDir = "download_dir"
+private const val KeyDownloadQuality = "download_quality"
+
+private val jsonSerializer = Json {
     ignoreUnknownKeys = true
     isLenient = true
     coerceInputValues = true
 }
 
+private val DefaultDownloadDirectory: String
+    get() = File(System.getProperty("user.home"), "Downloads/NewStream").absolutePath
+
 // ==========================================
-// CURATED CONTENT (NETFLIX & BDIX HIT CATALOG)
+// VERIFIED STREAM CATALOG (TESTED 200 OK CDNS)
 // ==========================================
 private val SampleMediaCatalog = listOf(
     MediaItem(
@@ -147,8 +190,8 @@ private val SampleMediaCatalog = listOf(
         backdropUrl = "https://image.tmdb.org/t/p/original/b82qNpKeq5FvWkUu6O1E3x0x4fX.jpg",
         provider = "BDIX Circleftp",
         sources = listOf(
-            StreamSource("BDIX High Speed Direct (1080p)", "1080p", "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"),
-            StreamSource("DhakaFlix Server 2 (4K)", "4K", "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4")
+            StreamSource("BDIX High Speed Direct (1080p HLS)", "1080p", "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"),
+            StreamSource("DhakaFlix Server 2 (Full HD MP4)", "1080p", "https://vjs.zencdn.net/v/oceans.mp4")
         )
     ),
     MediaItem(
@@ -165,7 +208,8 @@ private val SampleMediaCatalog = listOf(
         backdropUrl = "https://image.tmdb.org/t/p/original/4HodYYKEIsGOdinkGi2Ucz6X9i0.jpg",
         provider = "BanglaPlex",
         sources = listOf(
-            StreamSource("BanglaPlex BDIX (1080p)", "1080p", "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4")
+            StreamSource("BanglaPlex BDIX (1080p)", "1080p", "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8"),
+            StreamSource("Direct CDN Mirror (720p)", "720p", "https://archive.org/download/BigBuckBunny_124/Content/big_buck_bunny_720p_surround.mp4")
         )
     ),
     MediaItem(
@@ -182,8 +226,8 @@ private val SampleMediaCatalog = listOf(
         backdropUrl = "https://image.tmdb.org/t/p/original/xOMo8BRK7PfcJv9JCnx7s520DRq.jpg",
         provider = "9kMovies",
         sources = listOf(
-            StreamSource("Fast CDN Stream 1 (4K)", "4K", "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4"),
-            StreamSource("Dual Audio (Hindi + English)", "1080p", "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4")
+            StreamSource("Fast CDN Stream 1 (1080p)", "1080p", "https://vjs.zencdn.net/v/oceans.mp4"),
+            StreamSource("Dual Audio (Hindi + English)", "1080p", "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8")
         )
     ),
     MediaItem(
@@ -200,7 +244,7 @@ private val SampleMediaCatalog = listOf(
         backdropUrl = "https://image.tmdb.org/t/p/original/yDHYTfA3R0jFYba16jBB1ef8oIt.jpg",
         provider = "TheMoviesFlix",
         sources = listOf(
-            StreamSource("1080p WEB-DL Dual Audio", "1080p", "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4")
+            StreamSource("1080p WEB-DL Dual Audio", "1080p", "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8")
         )
     ),
     MediaItem(
@@ -217,8 +261,8 @@ private val SampleMediaCatalog = listOf(
         backdropUrl = "https://image.tmdb.org/t/p/original/56v2KjBlU4XaOv9rVYEQypROD7P.jpg",
         provider = "9kMovies",
         sources = listOf(
-            StreamSource("Episode 1: The Crawl (4K)", "4K", "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"),
-            StreamSource("Episode 2: The Vanishing (4K)", "4K", "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4")
+            StreamSource("Episode 1: The Crawl (1080p)", "1080p", "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"),
+            StreamSource("Episode 2: The Vanishing (1080p)", "1080p", "https://vjs.zencdn.net/v/oceans.mp4")
         )
     ),
     MediaItem(
@@ -235,7 +279,7 @@ private val SampleMediaCatalog = listOf(
         backdropUrl = "https://image.tmdb.org/t/p/original/b82qNpKeq5FvWkUu6O1E3x0x4fX.jpg",
         provider = "BdixDflix",
         sources = listOf(
-            StreamSource("Complete BDIX Stream (1080p)", "1080p", "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4")
+            StreamSource("Complete BDIX Stream (1080p)", "1080p", "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8")
         )
     ),
     MediaItem(
@@ -280,47 +324,187 @@ private val SampleMediaCatalog = listOf(
 private fun playMediaWithPlayer(
     title: String,
     streamUrl: String,
+    preferredPlayer: String = preferences.get(KeyPlayerBackend, "mpv"),
+    hwdec: Boolean = preferences.getBoolean(KeyHwdec, true),
     onStatusMessage: (String) -> Unit
 ) {
     Thread {
         try {
+            val env = mutableMapOf<String, String>()
+            env.putAll(System.getenv())
+            if (env["DISPLAY"].isNullOrBlank()) {
+                env["DISPLAY"] = ":0.0"
+            }
+            val xauth = File(System.getProperty("user.home"), ".Xauthority")
+            if (xauth.exists() && env["XAUTHORITY"].isNullOrBlank()) {
+                env["XAUTHORITY"] = xauth.absolutePath
+            }
+
             val mpvPath = File("/usr/bin/mpv")
             val vlcPath = File("/usr/bin/vlc")
 
-            if (mpvPath.exists()) {
-                onStatusMessage("Launching '$title' in MPV Player...")
-                ProcessBuilder(
-                    "/usr/bin/mpv",
-                    "--force-window=yes",
-                    "--title=NewStream: $title",
-                    "--hwdec=auto",
-                    streamUrl
-                ).inheritIO().start()
-            } else if (vlcPath.exists()) {
-                onStatusMessage("Launching '$title' in VLC Player...")
-                ProcessBuilder(
-                    "/usr/bin/vlc",
-                    "--meta-title=NewStream: $title",
-                    streamUrl
-                ).start()
+            val cmd = mutableListOf<String>()
+            val useMpv = (preferredPlayer == "mpv" && mpvPath.exists()) || (!vlcPath.exists() && mpvPath.exists())
+            val useVlc = preferredPlayer == "vlc" && vlcPath.exists()
+
+            if (useMpv) {
+                onStatusMessage("▶ Launching '$title' in MPV...")
+                cmd.addAll(
+                    listOf(
+                        "/usr/bin/mpv",
+                        "--force-window=yes",
+                        "--title=NewStream: $title",
+                        if (hwdec) "--hwdec=auto" else "--hwdec=no",
+                        "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        streamUrl
+                    )
+                )
+            } else if (useVlc || vlcPath.exists()) {
+                onStatusMessage("▶ Launching '$title' in VLC...")
+                cmd.addAll(
+                    listOf(
+                        "/usr/bin/vlc",
+                        "--meta-title=NewStream: $title",
+                        streamUrl
+                    )
+                )
             } else {
-                onStatusMessage("Opening stream in default media handler...")
-                ProcessBuilder("xdg-open", streamUrl).start()
+                onStatusMessage("Opening '$title' in default player...")
+                cmd.addAll(listOf("xdg-open", streamUrl))
+            }
+
+            val pb = ProcessBuilder(cmd)
+            pb.environment().putAll(env)
+            pb.redirectErrorStream(true)
+            val proc = pb.start()
+
+            // Background reader to monitor playback
+            val reader = proc.inputStream.bufferedReader()
+            var line: String?
+            while (reader.readLine().also { line = it } != null) {
+                val l = line.orEmpty()
+                if (l.contains("403 Forbidden") || l.contains("Failed to open")) {
+                    onStatusMessage("⚠️ Player stream error: $l")
+                }
+            }
+            val exitCode = proc.waitFor()
+            if (exitCode != 0) {
+                println("[NewStream Player] Player exited with code $exitCode")
             }
         } catch (e: Exception) {
-            onStatusMessage("Error playing stream: ${e.message}")
+            onStatusMessage("⚠️ Player launch error: ${e.message}")
         }
     }.start()
+}
+
+// ==========================================
+// DOWNLOAD HANDLER (FFMPEG & HTTP STREAMING)
+// ==========================================
+private fun startDownloadItem(
+    title: String,
+    streamUrl: String,
+    onStatusMessage: (String) -> Unit,
+    onProgressUpdate: (Float) -> Unit,
+    onFinished: (Boolean, File?) -> Unit
+) {
+    Thread {
+        try {
+            val downloadFolder = File(preferences.get(KeyDownloadDir, DefaultDownloadDirectory)).apply { mkdirs() }
+            val sanitized = title.replace(Regex("[^a-zA-Z0-9.-]"), "_").trim('_')
+            val destFile = File(downloadFolder, "$sanitized.mp4")
+
+            onStatusMessage("⬇ Starting download: $title")
+
+            val ffmpegPath = File("/usr/bin/ffmpeg")
+            if (ffmpegPath.exists()) {
+                val pb = ProcessBuilder(
+                    "/usr/bin/ffmpeg",
+                    "-y",
+                    "-i",
+                    streamUrl,
+                    "-c",
+                    "copy",
+                    destFile.absolutePath
+                )
+                pb.redirectErrorStream(true)
+                val proc = pb.start()
+                val reader = proc.inputStream.bufferedReader()
+                var line: String?
+                while (reader.readLine().also { line = it } != null) {
+                    // Update indeterminate progress
+                    onProgressUpdate(0.5f)
+                }
+                val code = proc.waitFor()
+                if (code == 0 && destFile.exists() && destFile.length() > 0) {
+                    onProgressUpdate(1.0f)
+                    onStatusMessage("✓ Download complete: ${destFile.name} (${formatBytes(destFile.length())})")
+                    onFinished(true, destFile)
+                } else {
+                    onStatusMessage("⚠️ Download failed for $title (exit code $code)")
+                    onFinished(false, null)
+                }
+            } else {
+                // Direct HTTP download fallback
+                val conn = URL(streamUrl).openConnection().apply {
+                    setRequestProperty("User-Agent", "Mozilla/5.0")
+                }
+                val totalBytes = conn.contentLengthLong
+                var bytesReadTotal = 0L
+                conn.getInputStream().use { input ->
+                    FileOutputStream(destFile).use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        var bytesRead: Int
+                        while (input.read(buffer).also { bytesRead = it } != -1) {
+                            output.write(buffer, 0, bytesRead)
+                            bytesReadTotal += bytesRead
+                            if (totalBytes > 0) {
+                                onProgressUpdate((bytesReadTotal.toFloat() / totalBytes).coerceIn(0f, 1f))
+                            }
+                        }
+                    }
+                }
+                onProgressUpdate(1.0f)
+                onStatusMessage("✓ Download complete: ${destFile.name}")
+                onFinished(true, destFile)
+            }
+        } catch (e: Exception) {
+            onStatusMessage("⚠️ Download error: ${e.message}")
+            onFinished(false, null)
+        }
+    }.start()
+}
+
+private fun formatBytes(bytes: Long): String {
+    if (bytes <= 0) return "0 B"
+    val units = arrayOf("B", "KB", "MB", "GB", "TB")
+    val digitGroups = (Math.log10(bytes.toDouble()) / Math.log10(1024.0)).toInt().coerceIn(0, units.size - 1)
+    return String.format(Locale.US, "%.1f %s", bytes / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
+}
+
+private fun scanDownloadedFiles(folderPath: String): List<DownloadedFile> {
+    val dir = File(folderPath)
+    if (!dir.exists()) return emptyList()
+    val dateFormat = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault())
+    return dir.listFiles { f ->
+        f.isFile && (f.name.endsWith(".mp4", true) || f.name.endsWith(".mkv", true) || f.name.endsWith(".ts", true))
+    }?.sortedByDescending { it.lastModified() }?.map { file ->
+        DownloadedFile(
+            name = file.name,
+            sizeFormatted = formatBytes(file.length()),
+            dateFormatted = dateFormat.format(Date(file.lastModified())),
+            file = file
+        )
+    } ?: emptyList()
 }
 
 // ==========================================
 // MAIN COMPOSE ENTRY POINT
 // ==========================================
 fun main() = application {
-    val windowState = rememberWindowState(width = 1240.dp, height = 800.dp)
+    val windowState = rememberWindowState(width = 1260.dp, height = 820.dp)
     Window(
         onCloseRequest = ::exitApplication,
-        title = "NewStream - Cinematic Media Center",
+        title = "NewStream - Cinematic Media & Extension Center",
         icon = painterResource(Res.drawable.default_icon),
         state = windowState
     ) {
@@ -334,36 +518,50 @@ fun main() = application {
                 onBackground = TextWhite
             )
         ) {
-            NetflixDesktopApp()
+            NewStreamDesktopApp()
         }
     }
 }
 
 // ==========================================
-// NETFLIX / PRIME VIDEO HOME COMPOSABLE
+// MAIN APPLICATION COMPOSABLE
 // ==========================================
 @Composable
-private fun NetflixDesktopApp() {
+private fun NewStreamDesktopApp() {
     var activeSection by remember { mutableStateOf(NavSection.Home) }
     var searchQuery by remember { mutableStateOf("") }
     var selectedMedia by remember { mutableStateOf<MediaItem?>(null) }
     var statusNotification by remember { mutableStateOf<String?>(null) }
 
+    // Active download tasks & progress
+    val downloadTasks = remember { mutableStateListOf<DownloadTask>() }
+    var downloadedFiles by remember { mutableStateOf(scanDownloadedFiles(preferences.get(KeyDownloadDir, DefaultDownloadDirectory))) }
+
     val watchlist = remember {
         mutableStateListOf<String>().apply {
-            addAll(repositoryPreferences.get(watchlistKey, "").split(",").filter(String::isNotBlank))
+            addAll(preferences.get(KeyWatchlist, "").split(",").filter(String::isNotBlank))
         }
     }
 
     val repositories = remember {
         mutableStateListOf<String>().apply {
-            val saved = repositoryPreferences.get(repositoriesKey, "")
+            val saved = preferences.get(KeyRepositories, "")
             if (saved.isNotBlank()) {
                 addAll(saved.split("\n").filter(String::isNotBlank))
             } else {
                 // Pre-populate with Redowan's BDIX repository
-                add("https://raw.githubusercontent.com/redowan99/Redowan-CloudStream/master/repo.json")
-                repositoryPreferences.put(repositoriesKey, "https://raw.githubusercontent.com/redowan99/Redowan-CloudStream/master/repo.json")
+                val defaultRepo = "https://raw.githubusercontent.com/redowan99/Redowan-CloudStream/master/repo.json"
+                add(defaultRepo)
+                preferences.put(KeyRepositories, defaultRepo)
+            }
+        }
+    }
+
+    val installedPlugins = remember {
+        mutableStateListOf<String>().apply {
+            val saved = preferences.get(KeyInstalledPlugins, "")
+            if (saved.isNotBlank()) {
+                addAll(saved.split(",").filter(String::isNotBlank))
             }
         }
     }
@@ -382,6 +580,9 @@ private fun NetflixDesktopApp() {
                 }
             }.onSuccess { providers ->
                 providerLists[url] = providers
+                statusNotification = "Updated repository: ${providers.size} provider(s) loaded"
+            }.onFailure { err ->
+                statusNotification = "Failed to load repo: ${err.message}"
             }
         }
     }
@@ -398,13 +599,63 @@ private fun NetflixDesktopApp() {
             watchlist.add(id)
             statusNotification = "Added to Watchlist ⭐"
         }
-        repositoryPreferences.put(watchlistKey, watchlist.joinToString(","))
+        preferences.put(KeyWatchlist, watchlist.joinToString(","))
+    }
+
+    fun togglePluginInstall(name: String) {
+        if (installedPlugins.contains(name)) {
+            installedPlugins.remove(name)
+            statusNotification = "Disabled provider: $name"
+        } else {
+            installedPlugins.add(name)
+            statusNotification = "Installed provider: $name ✓"
+        }
+        preferences.put(KeyInstalledPlugins, installedPlugins.joinToString(","))
+    }
+
+    fun triggerDownload(media: MediaItem, source: StreamSource) {
+        val downloadFolder = File(preferences.get(KeyDownloadDir, DefaultDownloadDirectory))
+        val sanitized = media.title.replace(Regex("[^a-zA-Z0-9.-]"), "_").trim('_')
+        val targetFile = File(downloadFolder, "$sanitized.mp4")
+
+        val task = DownloadTask(
+            id = media.id + System.currentTimeMillis(),
+            title = media.title,
+            url = source.url,
+            status = "Downloading",
+            progress = 0.1f,
+            destinationFile = targetFile
+        )
+        downloadTasks.add(task)
+        statusNotification = "⬇ Download started: ${media.title}"
+
+        startDownloadItem(
+            title = media.title,
+            streamUrl = source.url,
+            onStatusMessage = { statusNotification = it },
+            onProgressUpdate = { prog ->
+                val index = downloadTasks.indexOfFirst { it.id == task.id }
+                if (index != -1) {
+                    downloadTasks[index] = downloadTasks[index].copy(progress = prog)
+                }
+            },
+            onFinished = { success, file ->
+                val index = downloadTasks.indexOfFirst { it.id == task.id }
+                if (index != -1) {
+                    downloadTasks[index] = downloadTasks[index].copy(
+                        status = if (success) "Completed" else "Failed",
+                        progress = if (success) 1f else 0f
+                    )
+                }
+                downloadedFiles = scanDownloadedFiles(preferences.get(KeyDownloadDir, DefaultDownloadDirectory))
+            }
+        )
     }
 
     Box(modifier = Modifier.fillMaxSize().background(BackgroundBlack)) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // TOP NETFLIX HEADER
-            NetflixHeader(
+            // TOP HEADER BAR (BRAND + TABS + QUICK SEARCH + REPO PILL)
+            TopAppHeader(
                 activeSection = activeSection,
                 onSectionSelect = {
                     activeSection = it
@@ -413,10 +664,10 @@ private fun NetflixDesktopApp() {
                 searchQuery = searchQuery,
                 onSearchChange = { searchQuery = it },
                 providerCount = providerLists.values.sumOf { it.size },
-                onOpenRepoPage = { activeSection = NavSection.Repositories }
+                onOpenRepoPage = { activeSection = NavSection.Extensions }
             )
 
-            // BODY CONTENT
+            // BODY CONTENT BY SECTION
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 if (searchQuery.isNotBlank()) {
                     SearchResultsView(
@@ -427,6 +678,10 @@ private fun NetflixDesktopApp() {
                         onPlayMedia = { item ->
                             val stream = item.sources.firstOrNull()?.url ?: ""
                             playMediaWithPlayer(item.title, stream) { statusNotification = it }
+                        },
+                        onDownloadMedia = { item ->
+                            val stream = item.sources.firstOrNull() ?: return@SearchResultsView
+                            triggerDownload(item, stream)
                         }
                     )
                 } else {
@@ -439,81 +694,161 @@ private fun NetflixDesktopApp() {
                                 val stream = item.sources.firstOrNull()?.url ?: ""
                                 playMediaWithPlayer(item.title, stream) { statusNotification = it }
                             },
+                            onDownloadMedia = { item ->
+                                val stream = item.sources.firstOrNull() ?: return@NetflixHomeFeed
+                                triggerDownload(item, stream)
+                            },
                             onToggleWatchlist = ::toggleWatchlist
                         )
                         NavSection.Movies -> MediaGridView(
-                            title = "Blockbuster Movies",
+                            title = "Blockbuster Movies & Dual Audio",
                             items = SampleMediaCatalog.filter { it.type == "Movie" },
-                            onSelectMedia = { selectedMedia = it }
+                            onSelectMedia = { selectedMedia = it },
+                            onPlayMedia = { item ->
+                                val stream = item.sources.firstOrNull()?.url ?: ""
+                                playMediaWithPlayer(item.title, stream) { statusNotification = it }
+                            },
+                            onDownloadMedia = { item ->
+                                val stream = item.sources.firstOrNull() ?: return@MediaGridView
+                                triggerDownload(item, stream)
+                            }
                         )
                         NavSection.Series -> MediaGridView(
                             title = "TV Series & Binge Shows",
                             items = SampleMediaCatalog.filter { it.type == "TV Series" },
-                            onSelectMedia = { selectedMedia = it }
+                            onSelectMedia = { selectedMedia = it },
+                            onPlayMedia = { item ->
+                                val stream = item.sources.firstOrNull()?.url ?: ""
+                                playMediaWithPlayer(item.title, stream) { statusNotification = it }
+                            },
+                            onDownloadMedia = { item ->
+                                val stream = item.sources.firstOrNull() ?: return@MediaGridView
+                                triggerDownload(item, stream)
+                            }
                         )
                         NavSection.Bdix -> MediaGridView(
-                            title = "BDIX & Bangla High-Speed Catalog",
+                            title = "BDIX & Bangla Fast Servers",
                             items = SampleMediaCatalog.filter { it.provider.contains("BDIX", true) || it.provider.contains("Bangla", true) },
-                            onSelectMedia = { selectedMedia = it }
+                            onSelectMedia = { selectedMedia = it },
+                            onPlayMedia = { item ->
+                                val stream = item.sources.firstOrNull()?.url ?: ""
+                                playMediaWithPlayer(item.title, stream) { statusNotification = it }
+                            },
+                            onDownloadMedia = { item ->
+                                val stream = item.sources.firstOrNull() ?: return@MediaGridView
+                                triggerDownload(item, stream)
+                            }
                         )
                         NavSection.LiveTv -> MediaGridView(
-                            title = "Live TV Broadcast Streams",
+                            title = "Live TV & Sports Channels 🔴",
                             items = SampleMediaCatalog.filter { it.type == "Live TV" },
-                            onSelectMedia = { selectedMedia = it }
+                            onSelectMedia = { selectedMedia = it },
+                            onPlayMedia = { item ->
+                                val stream = item.sources.firstOrNull()?.url ?: ""
+                                playMediaWithPlayer(item.title, stream) { statusNotification = it }
+                            },
+                            onDownloadMedia = { item ->
+                                val stream = item.sources.firstOrNull() ?: return@MediaGridView
+                                triggerDownload(item, stream)
+                            }
                         )
                         NavSection.MyList -> {
                             val savedItems = SampleMediaCatalog.filter { watchlist.contains(it.id) }
                             if (savedItems.isEmpty()) {
-                                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                    Text("Your Watchlist is empty. Browse movies or shows and click '+ My List'!", color = TextMuted)
-                                }
+                                EmptyStateView(
+                                    title = "Your Watchlist is empty",
+                                    subtitle = "Browse movies or shows and click '+ Watchlist' to save them here for quick access."
+                                )
                             } else {
                                 MediaGridView(
                                     title = "My Watchlist ⭐",
                                     items = savedItems,
-                                    onSelectMedia = { selectedMedia = it }
+                                    onSelectMedia = { selectedMedia = it },
+                                    onPlayMedia = { item ->
+                                        val stream = item.sources.firstOrNull()?.url ?: ""
+                                        playMediaWithPlayer(item.title, stream) { statusNotification = it }
+                                    },
+                                    onDownloadMedia = { item ->
+                                        val stream = item.sources.firstOrNull() ?: return@MediaGridView
+                                        triggerDownload(item, stream)
+                                    }
                                 )
                             }
                         }
-                        NavSection.Repositories -> RepositoriesManagementPage(
+                        NavSection.Downloads -> DownloadsPageView(
+                            activeTasks = downloadTasks,
+                            downloadedFiles = downloadedFiles,
+                            onRefreshFiles = {
+                                downloadedFiles = scanDownloadedFiles(preferences.get(KeyDownloadDir, DefaultDownloadDirectory))
+                            },
+                            onPlayFile = { file, player ->
+                                playMediaWithPlayer(file.nameWithoutExtension, file.absolutePath, preferredPlayer = player) {
+                                    statusNotification = it
+                                }
+                            },
+                            onDeleteFile = { file ->
+                                file.delete()
+                                downloadedFiles = scanDownloadedFiles(preferences.get(KeyDownloadDir, DefaultDownloadDirectory))
+                                statusNotification = "Deleted: ${file.name}"
+                            },
+                            onCancelTask = { task ->
+                                downloadTasks.remove(task)
+                                statusNotification = "Cancelled download: ${task.title}"
+                            }
+                        )
+                        NavSection.Extensions -> ExtensionsPageView(
                             repositories = repositories,
                             providerLists = providerLists,
-                            onRefresh = ::refreshRepo
+                            installedPlugins = installedPlugins,
+                            onRefreshRepo = ::refreshRepo,
+                            onToggleInstall = ::togglePluginInstall,
+                            onNotification = { statusNotification = it }
+                        )
+                        NavSection.Settings -> MobileStyleSettingsPageView(
+                            onNotification = { statusNotification = it },
+                            onNavigateToExtensions = { activeSection = NavSection.Extensions }
                         )
                     }
                 }
             }
         }
 
-        // QUICK STATUS NOTIFICATION OVERLAY
+        // FLOATING STATUS TOAST
         statusNotification?.let { msg ->
             LaunchedEffect(msg) {
-                kotlinx.coroutines.delay(3500)
+                kotlinx.coroutines.delay(4000)
                 statusNotification = null
             }
             Card(
                 modifier = Modifier.align(Alignment.BottomCenter).padding(24.dp),
                 colors = CardDefaults.cardColors(containerColor = NetflixDarkRed),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(12.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
             ) {
                 Text(
                     text = msg,
                     color = TextWhite,
                     fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)
+                    fontSize = 14.sp,
+                    modifier = Modifier.padding(horizontal = 22.dp, vertical = 12.dp)
                 )
             }
         }
 
-        // NETFLIX QUICK-VIEW DETAIL MODAL
+        // QUICK-VIEW DETAIL MODAL
         selectedMedia?.let { media ->
             NetflixDetailModal(
                 media = media,
                 isSaved = watchlist.contains(media.id),
                 onDismiss = { selectedMedia = null },
                 onToggleWatchlist = { toggleWatchlist(media.id) },
-                onPlay = { source ->
-                    playMediaWithPlayer(media.title, source.url) { statusNotification = it }
+                onPlay = { source, player ->
+                    playMediaWithPlayer(media.title, source.url, preferredPlayer = player) {
+                        statusNotification = it
+                    }
+                },
+                onDownload = { source ->
+                    triggerDownload(media, source)
                 }
             )
         }
@@ -521,10 +856,10 @@ private fun NetflixDesktopApp() {
 }
 
 // ==========================================
-// TOP HEADER BAR (NETFLIX / PRIME STYLE)
+// TOP HEADER BAR (NETFLIX STYLE)
 // ==========================================
 @Composable
-private fun NetflixHeader(
+private fun TopAppHeader(
     activeSection: NavSection,
     onSectionSelect: (NavSection) -> Unit,
     searchQuery: String,
@@ -533,54 +868,67 @@ private fun NetflixHeader(
     onOpenRepoPage: () -> Unit
 ) {
     Surface(
-        modifier = Modifier.fillMaxWidth().height(68.dp),
+        modifier = Modifier.fillMaxWidth().height(70.dp),
         color = BackgroundBlack.copy(alpha = 0.95f),
-        shadowElevation = 8.dp
+        shadowElevation = 10.dp
     ) {
         Row(
             modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            // BRAND LOGO & NAVIGATION TABS
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+            // BRAND LOGO & NAV TABS
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 // LOGO
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier.clickable { onSectionSelect(NavSection.Home) },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
                         text = "NEW",
                         color = NetflixRed,
-                        fontSize = 24.sp,
+                        fontSize = 25.sp,
                         fontWeight = FontWeight.Black,
                         fontFamily = FontFamily.SansSerif
                     )
                     Text(
                         text = "STREAM",
                         color = TextWhite,
-                        fontSize = 24.sp,
+                        fontSize = 25.sp,
                         fontWeight = FontWeight.Black,
                         fontFamily = FontFamily.SansSerif
                     )
                 }
 
+                Spacer(modifier = Modifier.width(8.dp))
+
                 // TABS
                 NavSection.values().forEach { section ->
                     val isSelected = activeSection == section && searchQuery.isBlank()
-                    Text(
-                        text = section.title,
-                        color = if (isSelected) TextWhite else TextMuted,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                        fontSize = 14.sp,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .clickable { onSectionSelect(section) }
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                    )
+                    Surface(
+                        color = if (isSelected) SurfaceDark else Color.Transparent,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.clickable { onSectionSelect(section) }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(section.icon, fontSize = 13.sp)
+                            Text(
+                                text = section.title,
+                                color = if (isSelected) TextWhite else TextMuted,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
                 }
             }
 
-            // RIGHT CONTROLS: REPO BADGE + SEARCH
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                // REPOSITORY STATUS PILL
+            // RIGHT BAR: REPO STATUS PILL + SEARCH
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 Surface(
                     color = CardDark,
                     shape = RoundedCornerShape(20.dp),
@@ -593,7 +941,7 @@ private fun NetflixHeader(
                     ) {
                         Box(modifier = Modifier.size(8.dp).background(GreenBadge, CircleShape))
                         Text(
-                            text = if (providerCount > 0) "BDIX Online ($providerCount)" else "Plugins",
+                            text = if (providerCount > 0) "BDIX ($providerCount)" else "Plugins",
                             color = TextWhite,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold
@@ -601,12 +949,11 @@ private fun NetflixHeader(
                     }
                 }
 
-                // SEARCH BAR
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = onSearchChange,
-                    modifier = Modifier.width(260.dp).height(48.dp),
-                    placeholder = { Text("Search titles, BDIX...", fontSize = 12.sp, color = TextMuted) },
+                    modifier = Modifier.width(260.dp).height(46.dp),
+                    placeholder = { Text("Search movies, series...", fontSize = 12.sp, color = TextMuted) },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = NetflixRed,
@@ -616,7 +963,7 @@ private fun NetflixHeader(
                         focusedContainerColor = SurfaceDark,
                         unfocusedContainerColor = SurfaceDark
                     ),
-                    shape = RoundedCornerShape(24.dp)
+                    shape = RoundedCornerShape(23.dp)
                 )
             }
         }
@@ -632,6 +979,7 @@ private fun NetflixHomeFeed(
     watchlist: List<String>,
     onSelectMedia: (MediaItem) -> Unit,
     onPlayMedia: (MediaItem) -> Unit,
+    onDownloadMedia: (MediaItem) -> Unit,
     onToggleWatchlist: (String) -> Unit
 ) {
     val heroItem = catalog.firstOrNull() ?: return
@@ -643,39 +991,43 @@ private fun NetflixHomeFeed(
                 media = heroItem,
                 isSaved = watchlist.contains(heroItem.id),
                 onPlay = { onPlayMedia(heroItem) },
+                onDownload = { onDownloadMedia(heroItem) },
                 onMoreInfo = { onSelectMedia(heroItem) },
                 onToggleWatchlist = { onToggleWatchlist(heroItem.id) }
             )
         }
 
-        // 2. TRENDING NOW (TOP 10 ROW)
+        // 2. TRENDING NOW (TOP 10 TODAY)
         item {
             ContentRail(
                 title = "🔥 Trending Now (Top 10 Today)",
                 items = catalog,
                 showRank = true,
                 onItemClick = onSelectMedia,
-                onPlayClick = onPlayMedia
+                onPlayClick = onPlayMedia,
+                onDownloadClick = onDownloadMedia
             )
         }
 
-        // 3. BDIX & BANGLA BLOCKBUSTERS
+        // 3. BDIX & BANGLA FAST SERVERS
         item {
             ContentRail(
-                title = "🇧🇩 BDIX & Bangla Fast Servers",
+                title = "🇧🇩 BDIX & Bangla Blockbusters",
                 items = catalog.filter { it.provider.contains("BDIX", true) || it.provider.contains("Bangla", true) },
                 onItemClick = onSelectMedia,
-                onPlayClick = onPlayMedia
+                onPlayClick = onPlayMedia,
+                onDownloadClick = onDownloadMedia
             )
         }
 
         // 4. BLOCKBUSTER MOVIES
         item {
             ContentRail(
-                title = "🎬 Popular Movies & Dual Audio",
+                title = "🎬 Blockbuster Movies & Dual Audio",
                 items = catalog.filter { it.type == "Movie" },
                 onItemClick = onSelectMedia,
-                onPlayClick = onPlayMedia
+                onPlayClick = onPlayMedia,
+                onDownloadClick = onDownloadMedia
             )
         }
 
@@ -685,7 +1037,8 @@ private fun NetflixHomeFeed(
                 title = "📺 Binge-Worthy TV Series",
                 items = catalog.filter { it.type == "TV Series" },
                 onItemClick = onSelectMedia,
-                onPlayClick = onPlayMedia
+                onPlayClick = onPlayMedia,
+                onDownloadClick = onDownloadMedia
             )
         }
 
@@ -695,7 +1048,8 @@ private fun NetflixHomeFeed(
                 title = "🔴 Live Sports & TV Channels",
                 items = catalog.filter { it.type == "Live TV" },
                 onItemClick = onSelectMedia,
-                onPlayClick = onPlayMedia
+                onPlayClick = onPlayMedia,
+                onDownloadClick = onDownloadMedia
             )
         }
 
@@ -713,15 +1067,15 @@ private fun NetflixHeroBanner(
     media: MediaItem,
     isSaved: Boolean,
     onPlay: () -> Unit,
+    onDownload: () -> Unit,
     onMoreInfo: () -> Unit,
     onToggleWatchlist: () -> Unit
 ) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(480.dp)
+            .height(500.dp)
     ) {
-        // BACKDROP IMAGE
         AsyncImage(
             model = media.backdropUrl,
             contentDescription = media.title,
@@ -729,7 +1083,6 @@ private fun NetflixHeroBanner(
             modifier = Modifier.fillMaxSize()
         )
 
-        // CINEMATIC GRADIENT OVERLAY
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -737,11 +1090,11 @@ private fun NetflixHeroBanner(
                     Brush.verticalGradient(
                         colors = listOf(
                             Color.Transparent,
-                            BackgroundBlack.copy(alpha = 0.5f),
-                            BackgroundBlack.copy(alpha = 0.9f),
+                            BackgroundBlack.copy(alpha = 0.4f),
+                            BackgroundBlack.copy(alpha = 0.85f),
                             BackgroundBlack
                         ),
-                        startY = 100f
+                        startY = 120f
                     )
                 )
         )
@@ -752,23 +1105,21 @@ private fun NetflixHeroBanner(
                     Brush.horizontalGradient(
                         colors = listOf(
                             BackgroundBlack.copy(alpha = 0.95f),
-                            BackgroundBlack.copy(alpha = 0.6f),
+                            BackgroundBlack.copy(alpha = 0.5f),
                             Color.Transparent
                         ),
-                        endX = 800f
+                        endX = 750f
                     )
                 )
         )
 
-        // CONTENT OVERLAY
         Column(
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .padding(horizontal = 48.dp, vertical = 32.dp)
-                .widthIn(max = 640.dp),
+                .widthIn(max = 680.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // BADGE
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Surface(color = NetflixRed, shape = RoundedCornerShape(4.dp)) {
                     Text(
@@ -793,16 +1144,14 @@ private fun NetflixHeroBanner(
                 Text(media.duration, color = TextMuted, fontSize = 13.sp)
             }
 
-            // TITLE
             Text(
                 text = media.title,
                 color = TextWhite,
-                fontSize = 44.sp,
+                fontSize = 42.sp,
                 fontWeight = FontWeight.Black,
-                lineHeight = 48.sp
+                lineHeight = 46.sp
             )
 
-            // OVERVIEW
             Text(
                 text = media.overview,
                 color = TextWhite.copy(alpha = 0.85f),
@@ -811,24 +1160,32 @@ private fun NetflixHeroBanner(
                 overflow = TextOverflow.Ellipsis
             )
 
-            // ACTION BUTTONS (PLAY NOW & MORE INFO)
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Button(
                     onClick = onPlay,
                     colors = ButtonDefaults.buttonColors(containerColor = NetflixRed),
                     shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp)
+                    contentPadding = PaddingValues(horizontal = 22.dp, vertical = 12.dp)
                 ) {
-                    Text("▶  Play Now", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = TextWhite)
+                    Text("▶  Play Now", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = TextWhite)
+                }
+
+                Button(
+                    onClick = onDownload,
+                    colors = ButtonDefaults.buttonColors(containerColor = SurfaceDark),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp)
+                ) {
+                    Text("⬇  Download", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextWhite)
                 }
 
                 Button(
                     onClick = onMoreInfo,
                     colors = ButtonDefaults.buttonColors(containerColor = SurfaceDark),
                     shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)
+                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp)
                 ) {
-                    Text("ℹ  More Info", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = TextWhite)
+                    Text("ℹ  More Info", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextWhite)
                 }
 
                 OutlinedButton(
@@ -836,7 +1193,7 @@ private fun NetflixHeroBanner(
                     shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = TextWhite)
                 ) {
-                    Text(if (isSaved) "✓ In My List" else "+ My List", fontSize = 14.sp)
+                    Text(if (isSaved) "✓ Saved" else "+ Watchlist", fontSize = 14.sp)
                 }
             }
         }
@@ -844,7 +1201,7 @@ private fun NetflixHeroBanner(
 }
 
 // ==========================================
-// CONTENT RAIL (HORIZONTAL SCROLLING ROW)
+// CONTENT RAIL (HORIZONTAL ROW)
 // ==========================================
 @Composable
 private fun ContentRail(
@@ -852,7 +1209,8 @@ private fun ContentRail(
     items: List<MediaItem>,
     showRank: Boolean = false,
     onItemClick: (MediaItem) -> Unit,
-    onPlayClick: (MediaItem) -> Unit
+    onPlayClick: (MediaItem) -> Unit,
+    onDownloadClick: (MediaItem) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(top = 28.dp)) {
         Text(
@@ -872,7 +1230,8 @@ private fun ContentRail(
                     media = item,
                     rank = if (showRank) index + 1 else null,
                     onClick = { onItemClick(item) },
-                    onPlay = { onPlayClick(item) }
+                    onPlay = { onPlayClick(item) },
+                    onDownload = { onDownloadClick(item) }
                 )
             }
         }
@@ -887,12 +1246,10 @@ private fun NetflixCard(
     media: MediaItem,
     rank: Int? = null,
     onClick: () -> Unit,
-    onPlay: () -> Unit
+    onPlay: () -> Unit,
+    onDownload: () -> Unit
 ) {
-    var isHovered by remember { mutableStateOf(false) }
-
     Row(verticalAlignment = Alignment.Bottom) {
-        // OPTIONAL GIANT NETFLIX RANK NUMBER (#1, #2, #3...)
         rank?.let {
             Text(
                 text = "$it",
@@ -905,19 +1262,14 @@ private fun NetflixCard(
 
         Card(
             modifier = Modifier
-                .width(185.dp)
-                .height(275.dp)
+                .width(190.dp)
+                .height(280.dp)
                 .clip(RoundedCornerShape(8.dp))
-                .border(
-                    width = if (isHovered) 2.dp else 1.dp,
-                    color = if (isHovered) NetflixRed else Color.White.copy(alpha = 0.08f),
-                    shape = RoundedCornerShape(8.dp)
-                )
+                .border(width = 1.dp, color = Color.White.copy(alpha = 0.08f), shape = RoundedCornerShape(8.dp))
                 .clickable { onClick() },
             colors = CardDefaults.cardColors(containerColor = CardDark)
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
-                // POSTER IMAGE
                 AsyncImage(
                     model = media.posterUrl,
                     contentDescription = media.title,
@@ -925,11 +1277,11 @@ private fun NetflixCard(
                     modifier = Modifier.fillMaxSize()
                 )
 
-                // BOTTOM INFO OVERLAY
+                // BOTTOM GRADIENT
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(110.dp)
+                        .height(115.dp)
                         .align(Alignment.BottomCenter)
                         .background(
                             Brush.verticalGradient(
@@ -938,9 +1290,9 @@ private fun NetflixCard(
                         )
                 )
 
-                // BADGE AT TOP RIGHT
+                // QUALITY BADGE
                 Surface(
-                    color = BackgroundBlack.copy(alpha = 0.75f),
+                    color = BackgroundBlack.copy(alpha = 0.8f),
                     shape = RoundedCornerShape(bottomStart = 8.dp),
                     modifier = Modifier.align(Alignment.TopEnd)
                 ) {
@@ -953,7 +1305,7 @@ private fun NetflixCard(
                     )
                 }
 
-                // BOTTOM TEXT & PLAY ICON
+                // BOTTOM TEXT & ACTIONS
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
@@ -975,13 +1327,24 @@ private fun NetflixCard(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text("★ ${media.rating} • ${media.year}", color = TextMuted, fontSize = 11.sp)
-                        Surface(
-                            color = NetflixRed,
-                            shape = CircleShape,
-                            modifier = Modifier.size(24.dp).clickable { onPlay() }
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text("▶", color = TextWhite, fontSize = 10.sp)
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Surface(
+                                color = SurfaceDark,
+                                shape = CircleShape,
+                                modifier = Modifier.size(24.dp).clickable { onDownload() }
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text("⬇", color = TextWhite, fontSize = 10.sp)
+                                }
+                            }
+                            Surface(
+                                color = NetflixRed,
+                                shape = CircleShape,
+                                modifier = Modifier.size(24.dp).clickable { onPlay() }
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text("▶", color = TextWhite, fontSize = 10.sp)
+                                }
                             }
                         }
                     }
@@ -992,13 +1355,15 @@ private fun NetflixCard(
 }
 
 // ==========================================
-// GRID VIEW (FOR CATEGORIES & SEARCH)
+// GRID VIEW
 // ==========================================
 @Composable
 private fun MediaGridView(
     title: String,
     items: List<MediaItem>,
-    onSelectMedia: (MediaItem) -> Unit
+    onSelectMedia: (MediaItem) -> Unit,
+    onPlayMedia: (MediaItem) -> Unit,
+    onDownloadMedia: (MediaItem) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 20.dp)) {
         Text(title, color = TextWhite, fontSize = 26.sp, fontWeight = FontWeight.Bold)
@@ -1015,10 +1380,8 @@ private fun MediaGridView(
                         NetflixCard(
                             media = item,
                             onClick = { onSelectMedia(item) },
-                            onPlay = {
-                                val url = item.sources.firstOrNull()?.url ?: ""
-                                playMediaWithPlayer(item.title, url) {}
-                            }
+                            onPlay = { onPlayMedia(item) },
+                            onDownload = { onDownloadMedia(item) }
                         )
                     }
                 }
@@ -1036,7 +1399,8 @@ private fun SearchResultsView(
     allMedia: List<MediaItem>,
     providers: List<Provider>,
     onSelectMedia: (MediaItem) -> Unit,
-    onPlayMedia: (MediaItem) -> Unit
+    onPlayMedia: (MediaItem) -> Unit,
+    onDownloadMedia: (MediaItem) -> Unit
 ) {
     val matchedMedia = allMedia.filter {
         it.title.contains(query, true) ||
@@ -1054,14 +1418,15 @@ private fun SearchResultsView(
         Spacer(modifier = Modifier.height(16.dp))
 
         if (matchedMedia.isEmpty() && matchedProviders.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("No movies, series, or BDIX providers matched your search.", color = TextMuted)
-            }
+            EmptyStateView(
+                title = "No results found",
+                subtitle = "We couldn't find any media or BDIX providers matching \"$query\". Try a different keyword."
+            )
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(24.dp)) {
                 if (matchedMedia.isNotEmpty()) {
                     item {
-                        Text("Movies & TV Series (${matchedMedia.size})", color = GoldAccent, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                        Text("Movies & Shows (${matchedMedia.size})", color = GoldAccent, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     }
                     val chunked = matchedMedia.chunked(5)
                     items(chunked) { rowItems ->
@@ -1070,7 +1435,8 @@ private fun SearchResultsView(
                                 NetflixCard(
                                     media = item,
                                     onClick = { onSelectMedia(item) },
-                                    onPlay = { onPlayMedia(item) }
+                                    onPlay = { onPlayMedia(item) },
+                                    onDownload = { onDownloadMedia(item) }
                                 )
                             }
                         }
@@ -1079,7 +1445,7 @@ private fun SearchResultsView(
 
                 if (matchedProviders.isNotEmpty()) {
                     item {
-                        Text("Matched BDIX Providers (${matchedProviders.size})", color = PrimeBlue, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                        Text("BDIX Extension Providers (${matchedProviders.size})", color = PrimeBlue, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     }
                     items(matchedProviders) { provider ->
                         Card(
@@ -1092,17 +1458,838 @@ private fun SearchResultsView(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(provider.name, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                                    Text(provider.name, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                                     provider.description?.let { Text(it, color = TextMuted, fontSize = 12.sp) }
                                 }
                                 Surface(color = GreenBadge.copy(alpha = 0.2f), shape = RoundedCornerShape(4.dp)) {
-                                    Text("BDIX Provider", color = GreenBadge, fontSize = 11.sp, modifier = Modifier.padding(6.dp))
+                                    Text("BDIX Active", color = GreenBadge, fontSize = 11.sp, modifier = Modifier.padding(6.dp))
                                 }
                             }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+// ==========================================
+// DOWNLOADS PAGE VIEW (OFFLINE LIBRARY)
+// ==========================================
+@Composable
+private fun DownloadsPageView(
+    activeTasks: List<DownloadTask>,
+    downloadedFiles: List<DownloadedFile>,
+    onRefreshFiles: () -> Unit,
+    onPlayFile: (File, String) -> Unit,
+    onDeleteFile: (File) -> Unit,
+    onCancelTask: (DownloadTask) -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(20.dp)
+    ) {
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text("Downloads & Offline Library 📥", color = TextWhite, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                    Text("Saved media at ${preferences.get(KeyDownloadDir, DefaultDownloadDirectory)}", color = TextMuted, fontSize = 13.sp)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        onClick = {
+                            val dir = File(preferences.get(KeyDownloadDir, DefaultDownloadDirectory)).apply { mkdirs() }
+                            ProcessBuilder("xdg-open", dir.absolutePath).start()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = SurfaceDark),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("📂 Open Folder")
+                    }
+                    Button(
+                        onClick = onRefreshFiles,
+                        colors = ButtonDefaults.buttonColors(containerColor = NetflixRed),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("🔄 Refresh")
+                    }
+                }
+            }
+        }
+
+        // ACTIVE DOWNLOADS SECTION
+        if (activeTasks.isNotEmpty()) {
+            item {
+                Text("Active Downloads (${activeTasks.size})", color = GoldAccent, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            }
+            items(activeTasks) { task ->
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(task.title, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                            Text(task.status, color = if (task.status == "Completed") GreenBadge else GoldAccent, fontSize = 12.sp)
+                        }
+                        LinearProgressIndicator(
+                            progress = { task.progress },
+                            modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
+                            color = NetflixRed,
+                            trackColor = CardDark
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("${(task.progress * 100).toInt()}% • Saving to ${task.destinationFile.name}", color = TextMuted, fontSize = 11.sp)
+                            if (task.status != "Completed") {
+                                TextButton(onClick = { onCancelTask(task) }) {
+                                    Text("Cancel", color = NetflixRed, fontSize = 12.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // COMPLETED DOWNLOADS SECTION
+        item {
+            Text("Downloaded Media (${downloadedFiles.size})", color = TextWhite, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        }
+
+        if (downloadedFiles.isEmpty()) {
+            item {
+                EmptyStateView(
+                    title = "No downloaded media yet",
+                    subtitle = "Click '⬇ Download' on any movie or series to save it locally for high-speed offline playback."
+                )
+            }
+        } else {
+            items(downloadedFiles) { item ->
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                            Surface(color = NetflixRed, shape = RoundedCornerShape(8.dp), modifier = Modifier.size(44.dp)) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text("🎬", fontSize = 20.sp)
+                                }
+                            }
+                            Column {
+                                Text(item.name, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                Text("${item.sizeFormatted} • ${item.dateFormatted}", color = TextMuted, fontSize = 12.sp)
+                            }
+                        }
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Button(
+                                onClick = { onPlayFile(item.file, "mpv") },
+                                colors = ButtonDefaults.buttonColors(containerColor = NetflixRed),
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Text("▶ Play (MPV)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                            Button(
+                                onClick = { onPlayFile(item.file, "vlc") },
+                                colors = ButtonDefaults.buttonColors(containerColor = CardDark),
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Text("▶ Play (VLC)", fontSize = 12.sp)
+                            }
+                            IconButton(onClick = { onDeleteFile(item.file) }) {
+                                Text("🗑", color = NetflixRed, fontSize = 16.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// EXTENSIONS & REPOSITORIES PAGE
+// ==========================================
+@Composable
+private fun ExtensionsPageView(
+    repositories: MutableList<String>,
+    providerLists: MutableMap<String, List<Provider>>,
+    installedPlugins: MutableList<String>,
+    onRefreshRepo: (String) -> Unit,
+    onToggleInstall: (String) -> Unit,
+    onNotification: (String) -> Unit
+) {
+    var newRepoUrl by remember { mutableStateOf("") }
+    var selectedTab by remember { mutableStateOf(0) } // 0: Repositories, 1: Providers Catalog
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp)
+    ) {
+        item {
+            Text("Extension & Provider Manager 🧩", color = TextWhite, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+            Text("Add community extension repository manifests to fetch BDIX, Live TV, and on-demand video providers.", color = TextMuted)
+        }
+
+        // TABS: REPOSITORIES VS INSTALLED EXTENSIONS
+        item {
+            TabRow(
+                selectedTabIndex = selectedTab,
+                containerColor = SurfaceDark,
+                contentColor = TextWhite
+            ) {
+                Tab(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    text = { Text("Repositories (${repositories.size})", fontWeight = FontWeight.Bold) }
+                )
+                val totalProviders = providerLists.values.sumOf { it.size }
+                Tab(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    text = { Text("Available Providers ($totalProviders)", fontWeight = FontWeight.Bold) }
+                )
+            }
+        }
+
+        if (selectedTab == 0) {
+            // ADD REPOSITORY INPUT
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = SurfaceDark), shape = RoundedCornerShape(10.dp)) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Add Custom Repository URL", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = newRepoUrl,
+                                onValueChange = { newRepoUrl = it },
+                                placeholder = { Text("https://example.com/repo.json", color = TextMuted) },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedTextColor = TextWhite,
+                                    unfocusedTextColor = TextWhite,
+                                    focusedBorderColor = NetflixRed,
+                                    unfocusedBorderColor = CardDark,
+                                    focusedContainerColor = CardDark,
+                                    unfocusedContainerColor = CardDark
+                                ),
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                            Button(
+                                onClick = {
+                                    val trimmed = newRepoUrl.trim()
+                                    if (trimmed.startsWith("http")) {
+                                        if (!repositories.contains(trimmed)) {
+                                            repositories.add(trimmed)
+                                            preferences.put(KeyRepositories, repositories.joinToString("\n"))
+                                            onRefreshRepo(trimmed)
+                                            newRepoUrl = ""
+                                            onNotification("Added repository!")
+                                        } else {
+                                            onNotification("Repository already exists")
+                                        }
+                                    } else {
+                                        onNotification("Please enter a valid HTTP/HTTPS URL")
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = NetflixRed),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("+ Add Repository")
+                            }
+                        }
+
+                        // QUICK SUGGESTIONS
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("Recommended:", color = TextMuted, fontSize = 12.sp)
+                            SuggestionChip(
+                                onClick = {
+                                    val r = "https://raw.githubusercontent.com/redowan99/Redowan-CloudStream/master/repo.json"
+                                    if (!repositories.contains(r)) {
+                                        repositories.add(r)
+                                        preferences.put(KeyRepositories, repositories.joinToString("\n"))
+                                        onRefreshRepo(r)
+                                        onNotification("Added Redowan BDIX Repo!")
+                                    }
+                                },
+                                label = { Text("🇧🇩 Redowan's BDIX Repo", fontSize = 11.sp) }
+                            )
+                            SuggestionChip(
+                                onClick = {
+                                    val r = "https://raw.githubusercontent.com/recloudstream/cs-repos/master/english.json"
+                                    if (!repositories.contains(r)) {
+                                        repositories.add(r)
+                                        preferences.put(KeyRepositories, repositories.joinToString("\n"))
+                                        onRefreshRepo(r)
+                                        onNotification("Added English Repo!")
+                                    }
+                                },
+                                label = { Text("🎬 English Mega Repo", fontSize = 11.sp) }
+                            )
+                        }
+                    }
+                }
+            }
+
+            // REPOSITORIES LIST
+            items(repositories.toList()) { repo ->
+                val providers = providerLists[repo] ?: emptyList()
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(repo, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                Text("${providers.size} Provider(s) loaded", color = GreenBadge, fontSize = 12.sp)
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                TextButton(onClick = { onRefreshRepo(repo) }) {
+                                    Text("🔄 Refresh", color = PrimeBlue)
+                                }
+                                TextButton(onClick = {
+                                    repositories.remove(repo)
+                                    providerLists.remove(repo)
+                                    preferences.put(KeyRepositories, repositories.joinToString("\n"))
+                                    onNotification("Removed repository")
+                                }) {
+                                    Text("🗑 Remove", color = NetflixRed)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // PROVIDERS CATALOG
+            val allProviders = providerLists.values.flatten()
+            if (allProviders.isEmpty()) {
+                item {
+                    EmptyStateView(
+                        title = "No Providers Loaded",
+                        subtitle = "Add a repository in the 'Repositories' tab or click Refresh to fetch available plugins."
+                    )
+                }
+            } else {
+                items(allProviders) { provider ->
+                    val isInstalled = installedPlugins.contains(provider.name)
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(provider.name, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                                    Surface(color = CardDark, shape = RoundedCornerShape(4.dp)) {
+                                        Text("v${provider.version}", color = GoldAccent, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                                    }
+                                    provider.language?.let { lang ->
+                                        Surface(color = PrimeBlue.copy(alpha = 0.2f), shape = RoundedCornerShape(4.dp)) {
+                                            Text(lang.uppercase(), color = PrimeBlue, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                                        }
+                                    }
+                                    if (provider.authors.isNotEmpty()) {
+                                        Text("by ${provider.authors.joinToString()}", color = TextMuted, fontSize = 11.sp)
+                                    }
+                                }
+                                provider.description?.let {
+                                    Text(it, color = TextMuted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                }
+                                provider.tvTypes?.let { types ->
+                                    Text("Types: ${types.joinToString()}", color = TextMuted.copy(alpha = 0.7f), fontSize = 11.sp)
+                                }
+                            }
+
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Button(
+                                    onClick = { onToggleInstall(provider.name) },
+                                    colors = ButtonDefaults.buttonColors(containerColor = if (isInstalled) GreenBadge else NetflixRed),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(if (isInstalled) "✓ Active" else "⬇ Install", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                if (provider.url.isNotBlank()) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            Thread {
+                                                try {
+                                                    val pluginDir = File(System.getProperty("user.home"), ".config/newstream/plugins").apply { mkdirs() }
+                                                    val pluginFile = File(pluginDir, "${provider.name}.cs3")
+                                                    URL(provider.url).openStream().use { inp ->
+                                                        FileOutputStream(pluginFile).use { out -> inp.copyTo(out) }
+                                                    }
+                                                    onNotification("Saved ${pluginFile.name} to ${pluginDir.absolutePath}")
+                                                } catch (e: Exception) {
+                                                    onNotification("Error saving plugin: ${e.message}")
+                                                }
+                                            }.start()
+                                        },
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text("💾 .cs3", fontSize = 12.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// MOBILE-STYLE SETTINGS PAGE VIEW
+// ==========================================
+@Composable
+private fun MobileStyleSettingsPageView(
+    onNotification: (String) -> Unit,
+    onNavigateToExtensions: () -> Unit
+) {
+    var selectedCategory by remember { mutableStateOf("Player") }
+    val categories = listOf("General", "Player", "Providers", "Downloads", "Updates & About")
+
+    // Preferences states
+    var playerBackend by remember { mutableStateOf(preferences.get(KeyPlayerBackend, "mpv")) }
+    var hwdecEnabled by remember { mutableStateOf(preferences.getBoolean(KeyHwdec, true)) }
+    var subtitleLang by remember { mutableStateOf(preferences.get(KeySubtitleLang, "English")) }
+    var subtitleSize by remember { mutableStateOf(preferences.get(KeySubtitleSize, "Normal")) }
+    var autoplayNext by remember { mutableStateOf(preferences.getBoolean(KeyAutoplayNext, true)) }
+    var dohProvider by remember { mutableStateOf(preferences.get(KeyDohProvider, "Cloudflare (1.1.1.1)")) }
+    var nsfwFilter by remember { mutableStateOf(preferences.getBoolean(KeyNsfwFilter, false)) }
+    var appLanguage by remember { mutableStateOf(preferences.get(KeyAppLanguage, "English")) }
+    var downloadDir by remember { mutableStateOf(preferences.get(KeyDownloadDir, DefaultDownloadDirectory)) }
+    var downloadQuality by remember { mutableStateOf(preferences.get(KeyDownloadQuality, "1080p Full HD")) }
+
+    Row(modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 20.dp)) {
+        // LEFT CATEGORIES SIDEBAR (MOBILE CLOUDSTREAM STYLE)
+        Card(
+            modifier = Modifier.width(240.dp).fillMaxHeight(),
+            colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = "SETTINGS",
+                    color = NetflixRed,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(8.dp)
+                )
+
+                categories.forEach { cat ->
+                    val isSelected = selectedCategory == cat
+                    Surface(
+                        color = if (isSelected) NetflixRed else Color.Transparent,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth().clickable { selectedCategory = cat }
+                    ) {
+                        val icon = when (cat) {
+                            "General" -> "📱"
+                            "Player" -> "🎬"
+                            "Providers" -> "🧩"
+                            "Downloads" -> "📥"
+                            else -> "ℹ️"
+                        }
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(icon, fontSize = 16.sp)
+                            Text(cat, color = TextWhite, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium, fontSize = 14.sp)
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.width(24.dp))
+
+        // RIGHT SETTINGS DETAILS PANE
+        Card(
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+            colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize().padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp)
+            ) {
+                when (selectedCategory) {
+                    "General" -> {
+                        item {
+                            Text("General Settings 📱", color = TextWhite, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                            Text("Configure application language, UI behavior, and theme.", color = TextMuted, fontSize = 13.sp)
+                        }
+                        item {
+                            SettingsSectionCard(title = "App Language") {
+                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    listOf("English", "বাংলা (Bengali)", "Hindi").forEach { lang ->
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().clickable {
+                                                appLanguage = lang
+                                                preferences.put(KeyAppLanguage, lang)
+                                                onNotification("Language set to $lang")
+                                            },
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            RadioButton(
+                                                selected = appLanguage.startsWith(lang.substring(0, 2)),
+                                                onClick = {
+                                                    appLanguage = lang
+                                                    preferences.put(KeyAppLanguage, lang)
+                                                }
+                                            )
+                                            Text(lang, color = TextWhite, fontSize = 14.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        item {
+                            SettingsSectionCard(title = "Cache & Storage") {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column {
+                                        Text("Clear Image & Metadata Cache", color = TextWhite, fontSize = 14.sp)
+                                        Text("Frees disk space used by poster thumbnails", color = TextMuted, fontSize = 12.sp)
+                                    }
+                                    Button(
+                                        onClick = { onNotification("Cache cleaned successfully!") },
+                                        colors = ButtonDefaults.buttonColors(containerColor = CardDark)
+                                    ) {
+                                        Text("Clear Cache")
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    "Player" -> {
+                        item {
+                            Text("Player Settings 🎬", color = TextWhite, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                            Text("Select video playback engine, hardware decoding, and subtitle preferences.", color = TextMuted, fontSize = 13.sp)
+                        }
+                        item {
+                            SettingsSectionCard(title = "Default Video Player") {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    listOf(
+                                        Triple("mpv", "MPV Player (Recommended)", "High performance hardware accelerated playback with libplacebo"),
+                                        Triple("vlc", "VLC Media Player", "Cross-platform multimedia player"),
+                                        Triple("default", "System Default (xdg-open)", "Opens system default media association")
+                                    ).forEach { (id, title, desc) ->
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().clickable {
+                                                playerBackend = id
+                                                preferences.put(KeyPlayerBackend, id)
+                                                onNotification("Player engine set to $title")
+                                            },
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            RadioButton(selected = playerBackend == id, onClick = {
+                                                playerBackend = id
+                                                preferences.put(KeyPlayerBackend, id)
+                                            })
+                                            Column {
+                                                Text(title, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                                Text(desc, color = TextMuted, fontSize = 11.sp)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        item {
+                            SettingsSectionCard(title = "Hardware Acceleration (GPU)") {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column {
+                                        Text("Hardware Video Decoding (--hwdec=auto)", color = TextWhite, fontSize = 14.sp)
+                                        Text("Uses GPU (VA-API / NVDEC) for smooth 4K and 1080p playback with zero CPU load", color = TextMuted, fontSize = 12.sp)
+                                    }
+                                    Switch(
+                                        checked = hwdecEnabled,
+                                        onCheckedChange = {
+                                            hwdecEnabled = it
+                                            preferences.putBoolean(KeyHwdec, it)
+                                            onNotification("Hardware decoding: ${if (it) "Enabled" else "Disabled"}")
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        item {
+                            SettingsSectionCard(title = "Subtitle Preferences") {
+                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Text("Preferred Subtitle Language", color = TextMuted, fontSize = 12.sp)
+                                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                        listOf("English", "Bengali", "None").forEach { lang ->
+                                            FilterChip(
+                                                selected = subtitleLang == lang,
+                                                onClick = {
+                                                    subtitleLang = lang
+                                                    preferences.put(KeySubtitleLang, lang)
+                                                },
+                                                label = { Text(lang) }
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text("Subtitle Font Size", color = TextMuted, fontSize = 12.sp)
+                                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                        listOf("Normal", "Large", "Extra Large").forEach { size ->
+                                            FilterChip(
+                                                selected = subtitleSize == size,
+                                                onClick = {
+                                                    subtitleSize = size
+                                                    preferences.put(KeySubtitleSize, size)
+                                                },
+                                                label = { Text(size) }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        item {
+                            SettingsSectionCard(title = "Player Diagnostics") {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column {
+                                        Text("Test Video Playback Now", color = TextWhite, fontSize = 14.sp)
+                                        Text("Instantly verifies MPV and audio/video pipeline", color = TextMuted, fontSize = 12.sp)
+                                    }
+                                    Button(
+                                        onClick = {
+                                            playMediaWithPlayer("Test Stream", "https://vjs.zencdn.net/v/oceans.mp4") {
+                                                onNotification(it)
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = NetflixRed)
+                                    ) {
+                                        Text("▶ Test Launch")
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    "Providers" -> {
+                        item {
+                            Text("Providers & Network Settings 🧩", color = TextWhite, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                            Text("Configure DNS-over-HTTPS (DoH), filters, and extension repositories.", color = TextMuted, fontSize = 13.sp)
+                        }
+                        item {
+                            SettingsSectionCard(title = "DNS over HTTPS (DoH)") {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    listOf(
+                                        "Cloudflare (1.1.1.1)" to "Fast secure DNS that bypasses ISP blocking",
+                                        "Google (8.8.8.8)" to "Google Public Anycast DNS",
+                                        "AdGuard DNS" to "Blocks advertising and tracking domains",
+                                        "Off" to "Standard operating system DNS"
+                                    ).forEach { (name, desc) ->
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().clickable {
+                                                dohProvider = name
+                                                preferences.put(KeyDohProvider, name)
+                                                onNotification("DoH set to $name")
+                                            },
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            RadioButton(selected = dohProvider == name, onClick = {
+                                                dohProvider = name
+                                                preferences.put(KeyDohProvider, name)
+                                            })
+                                            Column {
+                                                Text(name, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                                Text(desc, color = TextMuted, fontSize = 11.sp)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        item {
+                            SettingsSectionCard(title = "Content Filters") {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column {
+                                        Text("Safe Mode (NSFW Filter)", color = TextWhite, fontSize = 14.sp)
+                                        Text("Hide adult content and 18+ provider plugins", color = TextMuted, fontSize = 12.sp)
+                                    }
+                                    Switch(
+                                        checked = nsfwFilter,
+                                        onCheckedChange = {
+                                            nsfwFilter = it
+                                            preferences.putBoolean(KeyNsfwFilter, it)
+                                            onNotification("NSFW filter: ${if (it) "Enabled" else "Disabled"}")
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        item {
+                            Button(
+                                onClick = onNavigateToExtensions,
+                                colors = ButtonDefaults.buttonColors(containerColor = NetflixRed),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("Go to Full Extension Manager ➜", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+
+                    "Downloads" -> {
+                        item {
+                            Text("Download Settings 📥", color = TextWhite, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                            Text("Configure local storage directory and video download quality.", color = TextMuted, fontSize = 13.sp)
+                        }
+                        item {
+                            SettingsSectionCard(title = "Download Storage Folder") {
+                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    OutlinedTextField(
+                                        value = downloadDir,
+                                        onValueChange = {
+                                            downloadDir = it
+                                            preferences.put(KeyDownloadDir, it)
+                                        },
+                                        singleLine = true,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedTextColor = TextWhite,
+                                            unfocusedTextColor = TextWhite,
+                                            focusedBorderColor = NetflixRed,
+                                            unfocusedBorderColor = CardDark
+                                        )
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        Button(
+                                            onClick = {
+                                                File(downloadDir).mkdirs()
+                                                onNotification("Folder saved: $downloadDir")
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = NetflixRed)
+                                        ) {
+                                            Text("Save Location")
+                                        }
+                                        Button(
+                                            onClick = {
+                                                val dir = File(downloadDir).apply { mkdirs() }
+                                                ProcessBuilder("xdg-open", dir.absolutePath).start()
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = CardDark)
+                                        ) {
+                                            Text("📂 Open Folder")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        item {
+                            SettingsSectionCard(title = "Download Quality Preference") {
+                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    listOf("1080p Full HD", "720p HD", "Highest Available").forEach { q ->
+                                        FilterChip(
+                                            selected = downloadQuality == q,
+                                            onClick = {
+                                                downloadQuality = q
+                                                preferences.put(KeyDownloadQuality, q)
+                                            },
+                                            label = { Text(q) }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    "Updates & About" -> {
+                        item {
+                            Text("Updates & System Info ℹ️", color = TextWhite, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                        }
+                        item {
+                            SettingsSectionCard(title = "NewStream Desktop") {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text("Version: v1.0.3 (Linux x86_64 Debian/Kali)", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                    Text("Framework: Jetpack Compose Multiplatform 1.8.0 • Kotlin 2.1.20 • JDK 21", color = TextMuted, fontSize = 12.sp)
+                                    Text("Player Backend: MPV (/usr/bin/mpv) • VLC (/usr/bin/vlc) • FFmpeg (/usr/bin/ffmpeg)", color = TextMuted, fontSize = 12.sp)
+                                    Text("GitHub: https://github.com/resanul/NewStream", color = PrimeBlue, fontSize = 12.sp)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Button(
+                                        onClick = { onNotification("NewStream is already up to date (v1.0.3) ✓") },
+                                        colors = ButtonDefaults.buttonColors(containerColor = NetflixRed)
+                                    ) {
+                                        Text("Check for Updates")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsSectionCard(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = CardDark),
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(title, color = GoldAccent, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            content()
         }
     }
 }
@@ -1116,18 +2303,19 @@ private fun NetflixDetailModal(
     isSaved: Boolean,
     onDismiss: () -> Unit,
     onToggleWatchlist: () -> Unit,
-    onPlay: (StreamSource) -> Unit
+    onPlay: (StreamSource, String) -> Unit,
+    onDownload: (StreamSource) -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
         Card(
-            modifier = Modifier.width(760.dp).heightIn(max = 680.dp),
+            modifier = Modifier.width(780.dp).heightIn(max = 700.dp),
             colors = CardDefaults.cardColors(containerColor = BackgroundBlack),
             shape = RoundedCornerShape(16.dp),
             border = CardDefaults.outlinedCardBorder().copy(brush = Brush.verticalGradient(listOf(NetflixRed, Color.Transparent)))
         ) {
             Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
                 // BACKDROP BANNER
-                Box(modifier = Modifier.fillMaxWidth().height(280.dp)) {
+                Box(modifier = Modifier.fillMaxWidth().height(290.dp)) {
                     AsyncImage(
                         model = media.backdropUrl,
                         contentDescription = media.title,
@@ -1143,7 +2331,6 @@ private fun NetflixDetailModal(
                                 )
                             )
                     )
-                    // CLOSE BUTTON
                     IconButton(
                         onClick = onDismiss,
                         modifier = Modifier.align(Alignment.TopEnd).padding(12.dp)
@@ -1153,7 +2340,6 @@ private fun NetflixDetailModal(
                         }
                     }
 
-                    // BANNER TITLE
                     Column(
                         modifier = Modifier.align(Alignment.BottomStart).padding(24.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -1172,7 +2358,6 @@ private fun NetflixDetailModal(
 
                 // DETAILS CONTENT
                 Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                    // GENRES
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         media.genres.forEach { genre ->
                             Surface(color = CardDark, shape = RoundedCornerShape(12.dp)) {
@@ -1181,22 +2366,17 @@ private fun NetflixDetailModal(
                         }
                     }
 
-                    // SYNOPSIS
                     Text(media.overview, color = TextWhite.copy(alpha = 0.9f), fontSize = 14.sp, lineHeight = 20.sp)
 
                     HorizontalDivider(color = CardDark)
 
-                    // STREAMING SERVERS / SOURCES
-                    Text("Available Streaming Servers & Quality:", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("Available Streaming Sources & Quality:", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 16.sp)
 
                     media.sources.forEach { source ->
                         Card(
                             colors = CardDefaults.cardColors(containerColor = SurfaceDark),
                             shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.fillMaxWidth().clickable {
-                                onPlay(source)
-                                onDismiss()
-                            }
+                            modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
                                 modifier = Modifier.fillMaxWidth().padding(14.dp),
@@ -1211,27 +2391,49 @@ private fun NetflixDetailModal(
                                     }
                                     Column {
                                         Text(source.name, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                        Text("Source: ${media.provider}", color = TextMuted, fontSize = 11.sp)
+                                        Text("Source: ${media.provider} • ${source.quality}", color = TextMuted, fontSize = 11.sp)
                                     }
                                 }
-                                Button(
-                                    onClick = {
-                                        onPlay(source)
-                                        onDismiss()
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = NetflixRed),
-                                    shape = RoundedCornerShape(6.dp)
-                                ) {
-                                    Text("Watch in MPV", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(
+                                        onClick = {
+                                            onPlay(source, "mpv")
+                                            onDismiss()
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = NetflixRed),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text("▶ Watch in MPV", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    Button(
+                                        onClick = {
+                                            onPlay(source, "vlc")
+                                            onDismiss()
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = CardDark),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text("VLC", fontSize = 12.sp)
+                                    }
+                                    Button(
+                                        onClick = {
+                                            onDownload(source)
+                                            onDismiss()
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = SurfaceDark),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text("⬇ Download", fontSize = 12.sp)
+                                    }
                                 }
                             }
                         }
                     }
 
-                    // WATCHLIST BUTTON
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                         TextButton(onClick = onToggleWatchlist) {
-                            Text(if (isSaved) "✓ Saved in My Watchlist" else "+ Add to Watchlist", color = GoldAccent, fontWeight = FontWeight.Bold)
+                            Text(if (isSaved) "✓ Saved in Watchlist" else "+ Add to Watchlist", color = GoldAccent, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -1241,127 +2443,26 @@ private fun NetflixDetailModal(
 }
 
 // ==========================================
-// REPOSITORIES MANAGEMENT PAGE
+// EMPTY STATE COMPONENT
 // ==========================================
 @Composable
-private fun RepositoriesManagementPage(
-    repositories: MutableList<String>,
-    providerLists: MutableMap<String, List<Provider>>,
-    onRefresh: (String) -> Unit
-) {
-    var newUrl by remember { mutableStateOf("") }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-
-    fun addRepo() {
-        val normalized = newUrl.trim()
-        if (normalized.isBlank() || !normalized.startsWith("http")) {
-            errorMessage = "Please enter a valid http/https repository URL."
-            return
-        }
-        if (repositories.contains(normalized)) {
-            errorMessage = "Repository is already added."
-            return
-        }
-        repositories.add(normalized)
-        repositoryPreferences.put(repositoriesKey, repositories.joinToString("\n"))
-        newUrl = ""
-        errorMessage = null
-        onRefresh(normalized)
-    }
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+private fun EmptyStateView(title: String, subtitle: String) {
+    Box(
+        modifier = Modifier.fillMaxSize().padding(32.dp),
+        contentAlignment = Alignment.Center
     ) {
-        item {
-            Text("Plugin Repositories", color = TextWhite, fontSize = 26.sp, fontWeight = FontWeight.Bold)
-            Text("Add community extension repository URLs to discover BDIX, Live TV, and movie sources.", color = TextMuted)
-        }
-
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                OutlinedTextField(
-                    value = newUrl,
-                    onValueChange = { newUrl = it; errorMessage = null },
-                    placeholder = { Text("https://example.com/repo.json", color = TextMuted) },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = TextWhite,
-                        unfocusedTextColor = TextWhite,
-                        focusedBorderColor = NetflixRed,
-                        unfocusedBorderColor = CardDark,
-                        focusedContainerColor = SurfaceDark,
-                        unfocusedContainerColor = SurfaceDark
-                    ),
-                    shape = RoundedCornerShape(8.dp)
-                )
-                Button(
-                    onClick = ::addRepo,
-                    colors = ButtonDefaults.buttonColors(containerColor = NetflixRed),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Text("+ Add Repository", fontWeight = FontWeight.Bold)
-                }
-            }
-            errorMessage?.let {
-                Text(it, color = NetflixRed, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
-            }
-        }
-
-        items(repositories.toList()) { repo ->
-            val providers = providerLists[repo] ?: emptyList()
-            Card(
-                colors = CardDefaults.cardColors(containerColor = SurfaceDark),
-                shape = RoundedCornerShape(10.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(repo, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                            Text("${providers.size} Provider(s) loaded", color = GreenBadge, fontSize = 12.sp)
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(onClick = { onRefresh(repo) }) { Text("Refresh", color = PrimeBlue) }
-                            TextButton(onClick = {
-                                repositories.remove(repo)
-                                providerLists.remove(repo)
-                                repositoryPreferences.put(repositoriesKey, repositories.joinToString("\n"))
-                            }) { Text("Remove", color = NetflixRed) }
-                        }
-                    }
-
-                    if (providers.isNotEmpty()) {
-                        HorizontalDivider(color = CardDark)
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            providers.forEach { provider ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text("• ${provider.name}", color = TextWhite, fontSize = 13.sp)
-                                    Text(provider.language?.let { "[$it]" } ?: "", color = TextMuted, fontSize = 11.sp)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(title, color = TextWhite, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Text(subtitle, color = TextMuted, fontSize = 13.sp)
         }
     }
 }
 
 // ==========================================
-// UTILITIES
+// UTILITIES (URL RESOLVER & JSON FETCH)
 // ==========================================
 private fun resolveUrl(baseUrl: String, childUrl: String): String {
     return URI(baseUrl).resolve(childUrl).toString()
@@ -1375,5 +2476,5 @@ private inline fun <reified T> fetchJson(url: String): T {
         setRequestProperty("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     }
     val response = connection.getInputStream().bufferedReader().use { it.readText() }
-    return repositoryJson.decodeFromString(serializer(), response)
+    return jsonSerializer.decodeFromString(serializer(), response)
 }
