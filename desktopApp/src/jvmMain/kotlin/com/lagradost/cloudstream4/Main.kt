@@ -1450,7 +1450,7 @@ private fun NewStreamDesktopApp() {
                 else -> emptyList()
             }
             if (newItems.isNotEmpty()) {
-                withContext(Dispatchers.Main) {
+                javax.swing.SwingUtilities.invokeLater {
                     val existingIds = mediaCatalog.map { it.id }.toSet()
                     val toAdd = newItems.filterNot { existingIds.contains(it.id) }
                     mediaCatalog.addAll(toAdd)
@@ -1504,7 +1504,7 @@ private fun NewStreamDesktopApp() {
                 val banglaData = fetchJson<TmdbPageResponse>(banglaUrl)
                 val newBangla = banglaData.results.map { tmdbItemToMediaItem(it, "Movie") }
 
-                withContext(Dispatchers.Main) {
+                javax.swing.SwingUtilities.invokeLater {
                     val existingIds = mediaCatalog.map { it.id }.toSet()
                     val toAdd = (newMovies + newTvSeries + newBangla).filterNot { existingIds.contains(it.id) }
                     mediaCatalog.addAll(toAdd)
@@ -1526,13 +1526,13 @@ private fun NewStreamDesktopApp() {
                         .filter { it.poster_path != null }
                         .map { tmdbItemToMediaItem(it) }
 
-                    withContext(Dispatchers.Main) {
+                    javax.swing.SwingUtilities.invokeLater {
                         dynamicSearchResults.clear()
                         dynamicSearchResults.addAll(results)
                         isSearching = false
                     }
                 }.onFailure {
-                    withContext(Dispatchers.Main) { isSearching = false }
+                    javax.swing.SwingUtilities.invokeLater { isSearching = false }
                 }
             }
         } else {
